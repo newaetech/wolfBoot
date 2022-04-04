@@ -20,7 +20,7 @@
  */
 #include <stdint.h>
 #include <string.h>
-#include "delta.h"
+#include <delta.h>
 
 
 #define ESC 0x7f
@@ -40,12 +40,18 @@ struct BLOCK_HDR_PACKED block_hdr {
 
 #define BLOCK_HDR_SIZE (sizeof (struct block_hdr))
 
-#ifndef WOLFBOOT_SECTOR_SIZE
-#   define WOLFBOOT_SECTOR_SIZE 0x1000
+#if defined(EXT_ENCRYPTED) && defined(__WOLFBOOT)
+#include "encrypt.h"
+#define ext_flash_check_write ext_flash_encrypt_write
+#define ext_flash_check_read ext_flash_decrypt_read
+#else
+#include "hal.h"
+#define ext_flash_check_write ext_flash_write
+#define ext_flash_check_read ext_flash_read
 #endif
 
-int wb_patch_init(WB_PATCH_CTX *bm, uint8_t *src, uint32_t ssz, uint8_t *patch, uint32_t psz)
-
+int wb_patch_init(WB_PATCH_CTX *bm, uint8_t *src, uint32_t ssz, uint8_t *patch,
+        uint32_t psz)
 {
     if (!bm || ssz == 0 || psz == 0) {
         return -1;
@@ -55,8 +61,42 @@ int wb_patch_init(WB_PATCH_CTX *bm, uint8_t *src, uint32_t ssz, uint8_t *patch, 
     bm->src_size = ssz;
     bm->patch_base = patch;
     bm->patch_size = psz;
+#ifdef EXT_FLASH
+    bm->patch_cache_start = 0xFFFFFFFF;
+#endif
     return 0;
 }
+
+#ifdef EXT_FLASH
+#define PATCH_CACHE_SIZE 256
+#define DELTA_SWAP_CACHE_SIZE 1024
+
+static inline uint8_t *patch_read_cache(WB_PATCH_CTX *ctx)
+{
+    if (ctx->patch_cache_start != 0xFFFFFFFF) {
+        if (ctx->patch_cache_start == ctx->p_off)
+            return ctx->patch_cache;
+
+        if (ctx->p_off < ctx->patch_cache_start +
+                (DELTA_PATCH_BLOCK_SIZE - BLOCK_HDR_SIZE))
+            return ctx->patch_cache + ctx->p_off - ctx->patch_cache_start;
+    }
+    ctx->patch_cache_start = ctx->p_off;
+    ext_flash_check_read(
+            (uintptr_t)(ctx->patch_base + ctx->p_off),
+            ctx->patch_cache, DELTA_PATCH_BLOCK_SIZE);
+    return ctx->patch_cache;
+}
+
+
+#else
+
+static inline uint8_t *patch_read_cache(WB_PATCH_CTX *ctx)
+{
+    return ctx->patch_base + ctx->p_off;
+}
+
+#endif
 
 int wb_patch(WB_PATCH_CTX *ctx, uint8_t *dst, uint32_t len)
 {
@@ -71,7 +111,7 @@ int wb_patch(WB_PATCH_CTX *ctx, uint8_t *dst, uint32_t len)
         return -1;
 
     while ( ( (ctx->matching != 0) || (ctx->p_off < ctx->patch_size)) && (dst_off < len)) {
-        uint8_t *pp = (ctx->patch_base + ctx->p_off);
+        uint8_t *pp = patch_read_cache(ctx);
         if (ctx->matching) {
             /* Resume matching block from previous sector */
             sz = ctx->blk_sz;
@@ -92,7 +132,7 @@ int wb_patch(WB_PATCH_CTX *ctx, uint8_t *dst, uint32_t len)
         if (*pp == ESC) {
             if (*(pp + 1) == ESC) {
                 *(dst + dst_off) = ESC;
-                 /* Two bytes of the patch have been consumed to produce ESC */
+                /* Two bytes of the patch have been consumed to produce ESC */
                 ctx->p_off += 2;
                 dst_off++;
                 continue;
@@ -119,7 +159,7 @@ int wb_patch(WB_PATCH_CTX *ctx, uint8_t *dst, uint32_t len)
                 dst_off += copy_sz;
             }
         } else {
-            *(dst + dst_off) = *(ctx->patch_base + ctx->p_off);
+            *(dst + dst_off) = *pp;
             dst_off++;
             ctx->p_off++;
         }
@@ -179,20 +219,31 @@ int wb_diff(WB_DIFF_CTX *ctx, uint8_t *patch, uint32_t len)
                 break;
             if ((memcmp(pa, (ctx->src_b + ctx->off_b), BLOCK_HDR_SIZE) == 0)) {
                 uint32_t b_start;
+                /* Identical areas of BLOCK_HDR_SIZE bytes match between the images.
+                 * initialize match_len; blk_start is the relative offset within
+                 * the src image.
+                 */
                 match_len = BLOCK_HDR_SIZE;
                 blk_start = pa - ctx->src_a;
                 b_start = ctx->off_b;
                 pa+= BLOCK_HDR_SIZE;
                 ctx->off_b += BLOCK_HDR_SIZE;
                 while (*pa == *(ctx->src_b + ctx->off_b)) {
-                    match_len++;
-                    pa++;
-                    ctx->off_b++;
-                    if ((uint32_t)(pa - ctx->src_a) >= ctx->size_a)
-                        break;
-                    if ((b_start / WOLFBOOT_SECTOR_SIZE) < (ctx->off_b / WOLFBOOT_SECTOR_SIZE)) {
+                    /* Extend matching block if possible, as long as the
+                     * identical sequence continues.
+                     */
+                    if ((uint32_t)(pa + 1 - ctx->src_a) >= ctx->size_a) {
+                        /* Stop matching if the source image size limit is hit. */
                         break;
                     }
+                    if ((b_start / WOLFBOOT_SECTOR_SIZE) < ((ctx->off_b + 1) / WOLFBOOT_SECTOR_SIZE)) {
+                        /* Stop matching when the sector bound is hit. */
+                        break;
+                    }
+                    /* Increase match len, test next byte */
+                    pa++;
+                    ctx->off_b++;
+                    match_len++;
                 }
                 hdr.esc = ESC;
                 hdr.off[0] = ((blk_start >> 16) & 0x000000FF);
@@ -212,23 +263,42 @@ int wb_diff(WB_DIFF_CTX *ctx, uint8_t *patch, uint32_t len)
             uint32_t pb_end = page_start * WOLFBOOT_SECTOR_SIZE;
             pb = ctx->src_b;
             while (((uint32_t)(pb - ctx->src_b) < pb_end) && (p_off < len)) {
+                /* Check image boundary */
                 if ((ctx->size_b - ctx->off_b) < BLOCK_HDR_SIZE)
                     break;
                 if ((uint32_t)(ctx->size_b - (pb - ctx->src_b)) < BLOCK_HDR_SIZE)
                     break;
+
+                /* Don't try matching backwards if the distance between the two
+                 * blocks is smaller than one sector.
+                 */
                 if (WOLFBOOT_SECTOR_SIZE > (pb - ctx->src_b) - (page_start * WOLFBOOT_SECTOR_SIZE))
                     break;
+
                 if ((memcmp(pb, (ctx->src_b + ctx->off_b), BLOCK_HDR_SIZE) == 0)) {
+                    /* A match was found between the current pointer and a
+                     * previously patched area in the resulting image.
+                     * Initialize match_len and set the blk_start to the beginning
+                     * of the matching area in the image.
+                     */
                     match_len = BLOCK_HDR_SIZE;
                     blk_start = pb - ctx->src_b;
                     pb+= BLOCK_HDR_SIZE;
                     ctx->off_b += BLOCK_HDR_SIZE;
                     while (*pb == *(ctx->src_b + ctx->off_b)) {
-                        match_len++;
+                        /* Extend match as long as the areas have the
+                         * same content. Block skipping in this case is
+                         * not a problem since the distance between the patched
+                         * area and the area to patch is always larger than one
+                         * block size.
+                         */
                         pb++;
-                        ctx->off_b++;
-                        if ((uint32_t)(pb - ctx->src_b) >= pb_end)
+                        if ((uint32_t)(pb - ctx->src_b) >= pb_end) {
+                            pb--;
                             break;
+                        }
+                        match_len++;
+                        ctx->off_b++;
                     }
                     hdr.esc = ESC;
                     hdr.off[0] = ((blk_start >> 16) & 0x000000FF);

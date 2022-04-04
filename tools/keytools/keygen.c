@@ -48,6 +48,10 @@
 #include <wolfssl/wolfcrypt/ed25519.h>
 #endif
 
+#ifdef HAVE_ED448
+#include <wolfssl/wolfcrypt/ed448.h>
+#endif
+
 #include <wolfssl/wolfcrypt/random.h>
 #include <wolfssl/wolfcrypt/error-crypt.h>
 #ifdef DEBUG_SIGNTOOL
@@ -62,9 +66,15 @@
 #define KEYGEN_ECC256  1
 #define KEYGEN_RSA2048 2
 #define KEYGEN_RSA4096 3
+#define KEYGEN_ED448   4
+#define KEYGEN_ECC384  5
+#define KEYGEN_ECC521  6
 
 const char Ed25519_pub_key_define[] = "const uint8_t ed25519_pub_key[32] = {";
+const char Ed448_pub_key_define[] = "const uint8_t ed448_pub_key[57] = {";
 const char Ecc256_pub_key_define[] = "const uint8_t ecc256_pub_key[64] = {";
+const char Ecc384_pub_key_define[] = "const uint8_t ecc384_pub_key[96] = {";
+const char Ecc521_pub_key_define[] = "const uint8_t ecc521_pub_key[132] = {";
 const char Rsa_2048_pub_key_define[] = "const uint8_t rsa2048_pub_key[%d] = {";
 const char Rsa_4096_pub_key_define[] = "const uint8_t rsa4096_pub_key[%d] = {";
 
@@ -79,7 +89,8 @@ const char Cfile_Banner[] = "/* Public-key file for wolfBoot, automatically gene
 
 static void usage(const char *pname) /* implies exit */
 {
-    printf("Usage: %s [--ed25519 | --ecc256 | --rsa2048 | --rsa4096 ]  pub_key_file.c\n", pname);
+    printf("Usage: %s [--ed25519 | --ed448 | --ecc256 | --ecc384 "
+           "| --ecc521 | --rsa2048 | --rsa4096 ]  pub_key_file.c\n", pname);
     exit(125);
 }
 
@@ -152,20 +163,21 @@ static void keygen_rsa(WC_RNG *rng, char *pubkeyfile, int size)
 #endif
 
 #ifdef HAVE_ECC
-#define ECC256_KEY_SIZE 32
-static void keygen_ecc256(WC_RNG *rng, char *pubkfile)
+#define MAX_ECC_KEY_SIZE 66
+
+static void keygen_ecc(WC_RNG *rng, char *pubkfile, uint16_t ecc_key_size)
 {
     ecc_key k;
-    uint8_t Qx[ECC256_KEY_SIZE], Qy[ECC256_KEY_SIZE], d[ECC256_KEY_SIZE];
-    uint32_t qxsize = ECC256_KEY_SIZE,
-             qysize = ECC256_KEY_SIZE,
-             dsize = ECC256_KEY_SIZE;
+    uint8_t Qx[MAX_ECC_KEY_SIZE], Qy[MAX_ECC_KEY_SIZE], d[MAX_ECC_KEY_SIZE];
+    uint32_t qxsize = ecc_key_size,
+             qysize = ecc_key_size,
+             dsize =  ecc_key_size;
     FILE *fpriv, *fpub;
     char priv_fname[20] = "";
 
 
-    if (wc_ecc_make_key(rng, ECC256_KEY_SIZE, &k) != 0) {
-        fprintf(stderr, "Unable to create ecc%d key\n", ECC256_KEY_SIZE << 3);
+    if (wc_ecc_make_key(rng, ecc_key_size, &k) != 0) {
+        fprintf(stderr, "Unable to create ecc key\n");
         exit(1);
     }
 
@@ -179,7 +191,7 @@ static void keygen_ecc256(WC_RNG *rng, char *pubkfile)
         exit(3);
     }
 
-    sprintf(priv_fname, "ecc%d.der", (ECC256_KEY_SIZE << 3));
+    sprintf(priv_fname, "ecc%d.der", (ecc_key_size < 66)?(ecc_key_size << 3):521);
 
     fpriv = fopen(priv_fname, "wb");
     if (fpriv == NULL) {
@@ -197,12 +209,25 @@ static void keygen_ecc256(WC_RNG *rng, char *pubkfile)
         exit(4);
     }
     fprintf(fpub, "%s", Cfile_Banner);
-    fprintf(fpub, "%s", Ecc256_pub_key_define);
+    if (ecc_key_size == 32)
+        fprintf(fpub, "%s", Ecc256_pub_key_define);
+    else if (ecc_key_size == 48)
+        fprintf(fpub, "%s", Ecc384_pub_key_define);
+    else if (ecc_key_size == 66)
+        fprintf(fpub, "%s", Ecc521_pub_key_define);
+    else
+        fprintf(fpub, "#error Unknown ecc key size");
+
     fwritekey(Qx, qxsize, fpub);
     fprintf(fpub, ",");
     fwritekey(Qy, qysize, fpub);
     fprintf(fpub, "\n};\n");
-    fprintf(fpub, "const uint32_t ecc256_pub_key_len = 64;\n");
+    if (ecc_key_size == 32)
+        fprintf(fpub, "const uint32_t ecc256_pub_key_len = 64;\n");
+    else if (ecc_key_size == 48)
+        fprintf(fpub, "const uint32_t ecc384_pub_key_len = 96;\n");
+    else if (ecc_key_size == 66)
+        fprintf(fpub, "const uint32_t ecc521_pub_key_len = 132;\n");
     fclose(fpub);
 }
 #endif
@@ -249,6 +274,47 @@ static void keygen_ed25519(WC_RNG *rng, char *pubkfile)
 }
 #endif
 
+#ifdef HAVE_ED448
+static void keygen_ed448(WC_RNG *rng, char *pubkfile)
+{
+    ed448_key k;
+    uint8_t priv[ED448_KEY_SIZE], pub[ED448_PUB_KEY_SIZE];
+    FILE *fpriv, *fpub;
+    uint32_t outlen = ED448_KEY_SIZE;
+    if (wc_ed448_make_key(rng, ED448_KEY_SIZE, &k) != 0) {
+        fprintf(stderr, "Unable to create ed448 key\n");
+        exit(1);
+    }
+    if (wc_ed448_export_private_only(&k, priv, &outlen) != 0) {
+        fprintf(stderr, "Unable to export ed448 private key\n");
+        exit(2);
+    }
+    if (wc_ed448_export_public(&k, pub, &outlen) != 0) {
+        fprintf(stderr, "Unable to export ed448 public key\n");
+        exit(2);
+    }
+    fpriv = fopen("ed448.der", "wb");
+    if (fpriv == NULL) {
+        fprintf(stderr, "Unable to open file 'ed448.der' for writing: %s", strerror(errno));
+        exit(3);
+    }
+    fwrite(priv, ED448_KEY_SIZE, 1, fpriv);
+    fwrite(pub, ED448_PUB_KEY_SIZE, 1, fpriv);
+    fclose(fpriv);
+    fpub = fopen(pubkfile, "w");
+    if (fpub == NULL) {
+        fprintf(stderr, "Unable to open file '%s' for writing: %s", pubkfile, strerror(errno));
+        exit(4);
+    }
+    fprintf(fpub, "%s", Cfile_Banner);
+    fprintf(fpub, "%s", Ed448_pub_key_define);
+    fwritekey(pub, ED448_KEY_SIZE, fpub);
+    fprintf(fpub, "\n};\n");
+    fprintf(fpub, "const uint32_t ed448_pub_key_len = 57;\n");
+    fclose(fpub);
+}
+#endif
+
 int main(int argc, char** argv)
 {
     int i;
@@ -273,9 +339,21 @@ int main(int argc, char** argv)
             keytype = KEYGEN_ED25519;
             kfilename = strdup("ed25519.der");
         }
+        else if (strcmp(argv[i], "--ed448") == 0) {
+            keytype = KEYGEN_ED448;
+            kfilename = strdup("ed448.der");
+        }
         else if (strcmp(argv[i], "--ecc256") == 0) {
             keytype = KEYGEN_ECC256;
             kfilename = strdup("ecc256.der");
+        }
+        else if (strcmp(argv[i], "--ecc384") == 0) {
+            keytype = KEYGEN_ECC384;
+            kfilename = strdup("ecc384.der");
+        }
+        else if (strcmp(argv[i], "--ecc521") == 0) {
+            keytype = KEYGEN_ECC521;
+            kfilename = strdup("ecc521.der");
         }
         else if (strcmp(argv[i], "--rsa2048") == 0) {
             keytype = KEYGEN_RSA2048;
@@ -325,10 +403,28 @@ int main(int argc, char** argv)
             }
 #endif
 
+#ifdef HAVE_ED448
+        case KEYGEN_ED448:
+            {
+                keygen_ed448(&rng, output_pubkey_file);
+                break;
+            }
+#endif
+
 #ifdef HAVE_ECC
         case KEYGEN_ECC256:
             {
-                keygen_ecc256(&rng, output_pubkey_file);
+                keygen_ecc(&rng, output_pubkey_file, 32);
+                break;
+            }
+        case KEYGEN_ECC384:
+            {
+                keygen_ecc(&rng, output_pubkey_file, 48);
+                break;
+            }
+        case KEYGEN_ECC521:
+            {
+                keygen_ecc(&rng, output_pubkey_file, 66);
                 break;
             }
 #endif

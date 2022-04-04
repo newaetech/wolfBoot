@@ -1,6 +1,7 @@
 ## CPU Architecture selection via $ARCH
 UPDATE_OBJS:=./src/update_flash.o
 
+
 # check for FASTMATH or SP_MATH
 ifeq ($(SPMATH),1)
   MATH_OBJS:=./lib/wolfssl/wolfcrypt/src/sp_int.o
@@ -20,6 +21,13 @@ UART_TARGET=$(TARGET)
 
 # Include SHA256 module because it's implicitly needed by RSA
 WOLFCRYPT_OBJS+=./lib/wolfssl/wolfcrypt/src/sha256.o
+
+ifeq ($(ARCH),x86_64)
+  OBJS+=src/boot_x86_64.o
+  ifeq ($(DEBUG),1)
+    CFLAGS+=-DWOLFBOOT_DEBUG_EFI=1
+  endif
+endif
 
 ## ARM
 ifeq ($(ARCH),AARCH64)
@@ -50,24 +58,73 @@ ifeq ($(ARCH),ARM)
 
   ifeq ($(TARGET),stm32g0)
     CORTEX_M0=1
+    ARCH_FLASH_OFFSET=0x08000000
+    WOLFBOOT_ORIGIN=$(ARCH_FLASH_OFFSET)
+
+    # Enable this feature for secure memory support
+    # Makes the flash sectors for the bootloader unacessible from the application
+    # Requires using the STM32CubeProgrammer to set FLASH_SECR -> SEC_SIZE pages
+    CFLAGS+=-DFLASH_SECURABLE_MEMORY_SUPPORT
+  endif
+
+  ifeq ($(TARGET),stm32f4)
+    ARCH_FLASH_OFFSET=0x08000000
+    WOLFBOOT_ORIGIN=$(ARCH_FLASH_OFFSET)
+    SPI_TARGET=stm32
+  endif
+
+  ifeq ($(TARGET),stm32l4)
+    SPI_TARGET=stm32
+    ARCH_FLASH_OFFSET=0x08000000
+    WOLFBOOT_ORIGIN=$(ARCH_FLASH_OFFSET)
+    OBJS+=$(STM32CUBE)/Drivers/STM32L4xx_HAL_Driver/Src/stm32l4xx_hal_flash.o
+    OBJS+=$(STM32CUBE)/Drivers/STM32L4xx_HAL_Driver/Src/stm32l4xx_hal_flash_ex.o
+    CFLAGS+=-DSTM32L4A6xx -DUSE_HAL_DRIVER -Isrc -Ihal \
+      -I$(STM32CUBE)/Drivers/STM32L4xx_HAL_Driver/Inc/ \
+      -I$(STM32CUBE)/Drivers/BSP/STM32L4xx_Nucleo_144/ \
+      -I$(STM32CUBE)/Drivers/CMSIS/Device/ST/STM32L4xx/Include/ \
+      -I$(STM32CUBE)/Drivers/CMSIS/Include/
   endif
 
   ifeq ($(TARGET),stm32f7)
     ARCH_FLASH_OFFSET=0x08000000
+    WOLFBOOT_ORIGIN=$(ARCH_FLASH_OFFSET)
     SPI_TARGET=stm32
   endif
 
   ifeq ($(TARGET),stm32h7)
     ARCH_FLASH_OFFSET=0x08000000
+    WOLFBOOT_ORIGIN=$(ARCH_FLASH_OFFSET)
     SPI_TARGET=stm32
   endif
 
   ifeq ($(TARGET),stm32wb)
     ARCH_FLASH_OFFSET=0x08000000
+    WOLFBOOT_ORIGIN=$(ARCH_FLASH_OFFSET)
     SPI_TARGET=stm32
+    ifneq ($(PKA),0)
+      PKA_EXTRA_OBJS+= $(STM32CUBE)/Drivers/STM32WBxx_HAL_Driver/Src/stm32wbxx_hal_pka.o  ./lib/wolfssl/wolfcrypt/src/port/st/stm32.o
+      PKA_EXTRA_CFLAGS+=-DWOLFSSL_STM32_PKA -I$(STM32CUBE)/Drivers/STM32WBxx_HAL_Driver/Inc \
+          -Isrc -I$(STM32CUBE)/Drivers/BSP/P-NUCLEO-WB55.Nucleo/ -I$(STM32CUBE)/Drivers/CMSIS/Device/ST/STM32WBxx/Include \
+          -I$(STM32CUBE)/Drivers/STM32WBxx_HAL_Driver/Inc/ \
+          -I$(STM32CUBE)/Drivers/CMSIS/Include \
+          -Ihal \
+          -DSTM32WB55xx
+    endif
   endif
 
   ifeq ($(TARGET),stm32l5)
+    CORTEX_M33=1
+    CFLAGS+=-Ihal -DCORTEX_M33
+    ARCH_FLASH_OFFSET=0x08000000
+    ifeq ($(TZEN),1)
+      WOLFBOOT_ORIGIN=0x0C000000
+    else
+      WOLFBOOT_ORIGIN=0x08000000
+    endif
+  endif
+
+  ifeq ($(TARGET),stm32u5)
     CORTEX_M33=1
     CFLAGS+=-Ihal -DCORTEX_M33
     ARCH_FLASH_OFFSET=0x08000000
@@ -187,7 +244,7 @@ endif
 ifeq ($(TARGET),ti_hercules)
   # HALCoGen Source and Include?
   CORTEX_R5=1
-  CFLAGS+=-D"CORTEX_R5" -D"BIG_ENDIAN_ORDER"
+  CFLAGS+=-D"CORTEX_R5" -D"BIG_ENDIAN_ORDER" -D"NVM_FLASH_WRITEONCE" -D"FLASHBUFFER_SIZE=32"
   STACK_USAGE=0
   USE_GCC=0
 
@@ -207,7 +264,7 @@ ifeq ($(TARGET),ti_hercules)
 
   ARCH_FLAGS=-mv7R5 --code_state=32 --float_support=VFPv3D16 --enum_type=packed --abi=eabi -I"$(CCS_ROOT)/include" -I"$(F021_DIR)/include"
   CFLAGS+=$(ARCH_FLAGS)
-  LDFLAGS+=$(ARCH_FLAGS) -i"$(CCS_ROOT)/lib" -i"$(F021_DIR)" -z --be32 --map_file=wolfboot.map --reread_libs --diag_wrap=off --display_error_number --warn_sections -stack=0 -heap=0
+  LDFLAGS+=$(ARCH_FLAGS) -i"$(CCS_ROOT)/lib" -i"$(F021_DIR)" -z --be32 --map_file=wolfboot.map --reread_libs --diag_wrap=off --display_error_number --warn_sections --heap_size=0 --stack_size=0x800 --ram_model
   LD_START_GROUP= #--start-group
   LD_END_GROUP= -llibc.a -l"$(F021_DIR)\\F021_API_CortexR4_BE_L2FMC_V3D16.lib" $(LSCRIPT)
 
@@ -221,26 +278,9 @@ ifeq ($(TARGET),lpc)
   OBJS+=$(MCUXPRESSO_DRIVERS)/drivers/fsl_usart.o $(MCUXPRESSO_DRIVERS)/drivers/fsl_flexcomm.o
 endif
 
-ifeq ($(TARGET),stm32f4)
-  SPI_TARGET=stm32
-endif
-
-ifeq ($(TARGET),stm32wb)
-  SPI_TARGET=stm32
-  ifneq ($(PKA),0)
-    PKA_EXTRA_OBJS+= $(STM32CUBE)/Drivers/STM32WBxx_HAL_Driver/Src/stm32wbxx_hal_pka.o  ./lib/wolfssl/wolfcrypt/src/port/st/stm32.o
-    PKA_EXTRA_CFLAGS+=-DWOLFSSL_STM32_PKA -I$(STM32CUBE)/Drivers/STM32WBxx_HAL_Driver/Inc \
-        -Isrc -I$(STM32CUBE)/Drivers/BSP/P-NUCLEO-WB55.Nucleo/ -I$(STM32CUBE)/Drivers/CMSIS/Device/ST/STM32WBxx/Include \
-        -I$(STM32CUBE)/Drivers/STM32WBxx_HAL_Driver/Inc/ \
-        -I$(STM32CUBE)/Drivers/CMSIS/Include \
-        -Ihal \
-        -DSTM32WB55xx
-  endif
-endif
-
 ifeq ($(TARGET),psoc6)
     CORTEX_M0=1
-    PKA_EXTRA_OBJS+= $(CYPRESS_PDL)/drivers/source/cy_flash.o \
+    OBJS+= $(CYPRESS_PDL)/drivers/source/cy_flash.o \
                      $(CYPRESS_PDL)/drivers/source/cy_ipc_pipe.o \
                      $(CYPRESS_PDL)/drivers/source/cy_ipc_sema.o \
                      $(CYPRESS_PDL)/drivers/source/cy_ipc_drv.o \
@@ -252,6 +292,19 @@ ifeq ($(TARGET),psoc6)
                      $(CYPRESS_PDL)/drivers/source/cy_wdt.o \
                      $(CYPRESS_PDL)/drivers/source/TOOLCHAIN_GCC_ARM/cy_syslib_gcc.o \
                      $(CYPRESS_PDL)/devices/templates/COMPONENT_MTB/COMPONENT_CM0P/system_psoc6_cm0plus.o
+    PSOC6_CRYPTO_OBJS=./lib/wolfssl/wolfcrypt/src/port/cypress/psoc6_crypto.o \
+					 $(CYPRESS_PDL)/drivers/source/cy_crypto_core_vu.o \
+					 $(CYPRESS_PDL)/drivers/source/cy_crypto_core_ecc_domain_params.o \
+					 $(CYPRESS_PDL)/drivers/source/cy_crypto_core_ecc_nist_p.o \
+					 $(CYPRESS_PDL)/drivers/source/cy_crypto_core_ecc_ecdsa.o \
+					 $(CYPRESS_PDL)/drivers/source/cy_crypto_core_sha_v2.o \
+					 $(CYPRESS_PDL)/drivers/source/cy_crypto_core_sha_v1.o \
+					 $(CYPRESS_PDL)/drivers/source/cy_crypto_core_mem_v2.o \
+					 $(CYPRESS_PDL)/drivers/source/cy_crypto_core_mem_v1.o \
+					 $(CYPRESS_PDL)/drivers/source/cy_crypto_core_hw.o \
+					 $(CYPRESS_PDL)/drivers/source/cy_crypto_core_hw_v1.o \
+					 $(CYPRESS_PDL)/drivers/source/cy_crypto.o
+
     CFLAGS+=-I$(CYPRESS_PDL)/drivers/include/ \
         -I$(CYPRESS_PDL)/devices/include \
         -I$(CYPRESS_PDL)/cmsis/include \
@@ -267,17 +320,6 @@ ifeq ($(TARGET),psoc6)
     endif
 endif
 
-ifeq ($(TARGET),stm32l4)
-  SPI_TARGET=stm32
-  ARCH_FLASH_OFFSET=0x08000000
-  OBJS+=$(STM32CUBE)/Drivers/STM32L4xx_HAL_Driver/Src/stm32l4xx_hal_flash.o
-  OBJS+=$(STM32CUBE)/Drivers/STM32L4xx_HAL_Driver/Src/stm32l4xx_hal_flash_ex.o
-  CFLAGS+=-DSTM32L4A6xx -DUSE_HAL_DRIVER -Isrc -Ihal \
-    -I$(STM32CUBE)/Drivers/STM32L4xx_HAL_Driver/Inc/ \
-    -I$(STM32CUBE)/Drivers/BSP/STM32L4xx_Nucleo_144/ \
-    -I$(STM32CUBE)/Drivers/CMSIS/Device/ST/STM32L4xx/Include/ \
-    -I$(STM32CUBE)/Drivers/CMSIS/Include/
-endif
 
 CFLAGS+=-DARCH_FLASH_OFFSET=$(ARCH_FLASH_OFFSET)
 
@@ -291,6 +333,21 @@ ifeq ($(USE_GCC),1)
   OBJCOPY=$(CROSS_COMPILE)objcopy
   SIZE=$(CROSS_COMPILE)size
   OUTPUT_FLAG=-o
+endif
+
+
+ifeq ($(TARGET),x86_64_efi)
+  GNU_EFI_LIB_PATH?=/usr/lib
+  GNU_EFI_CRT0=$(GNU_EFI_LIB_PATH)/crt0-efi-x86_64.o
+  GNU_EFI_LSCRIPT=$(GNU_EFI_LIB_PATH)/elf_x86_64_efi.lds
+  CFLAGS += -fpic -ffreestanding -fno-stack-protector -fno-stack-check \
+            -fshort-wchar -mno-red-zone -maccumulate-outgoing-args
+  CFLAGS += -I/usr/include/efi -I/usr/include/efi/x86_64 -DPLATFORM_X86_64_EFI
+  LDFLAGS = -shared -Bsymbolic -L/usr/lib -T$(GNU_EFI_LSCRIPT)
+  LD_START_GROUP = $(GNU_EFI_CRT0)
+  LD_END_GROUP = -lgnuefi -lefi
+  LD = ld
+  UPDATE_OBJS:=src/update_ram.o
 endif
 
 BOOT_IMG?=test-app/image.bin
@@ -308,3 +365,4 @@ endif
 ifeq ($(DEBUG),1)
   WOLFCRYPT_OBJS+=./lib/wolfssl/wolfcrypt/src/logging.o
 endif
+

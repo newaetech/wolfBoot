@@ -27,7 +27,7 @@
 #include <string.h>
 #include "system.h"
 #include "hal.h"
-#include <wolfboot/wolfboot.h>
+#include "wolfboot/wolfboot.h"
 
 #define LED_BOOT_PIN (12)  //PG12 - Discovery - Green Led
 #define LED_USR_PIN (13) //PD3  - Discovery  - Red Led
@@ -140,8 +140,8 @@ void main(void)
     hal_init();
     usr_led_on();
     check_for_boot();
-
-
+    if (wolfBoot_current_firmware_version() > 1)
+        boot_led_on();
     while(1)
         ;
 }

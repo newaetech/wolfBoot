@@ -58,7 +58,9 @@
 #   define NULL (void *)0
 #endif
 
+#ifndef NVM_CACHE_SIZE
 #define NVM_CACHE_SIZE WOLFBOOT_SECTOR_SIZE
+#endif
 
 #ifdef EXT_FLASH
 static uint32_t ext_cache;
@@ -70,7 +72,9 @@ static const uint32_t wolfboot_magic_trail = WOLFBOOT_MAGIC_TRAIL;
  *  - PART_UPDATE_ENDFLAGS = top of flags for UPDATE_PARTITION
  */
 
+#ifndef PART_BOOT_ENDFLAGS
 #define PART_BOOT_ENDFLAGS   (WOLFBOOT_PARTITION_BOOT_ADDRESS + ENCRYPT_TMP_SECRET_OFFSET)
+#endif
 #define FLAGS_BOOT_EXT() PARTN_IS_EXT(PART_BOOT)
 
 #ifdef FLAGS_HOME
@@ -97,15 +101,23 @@ static const uint32_t wolfboot_magic_trail = WOLFBOOT_MAGIC_TRAIL;
 static uint8_t NVM_CACHE[NVM_CACHE_SIZE] __attribute__((aligned(16)));
 
 int RAMFUNCTION hal_trailer_write(uint32_t addr, uint8_t val) {
-    uint32_t addr_align = addr & (~(WOLFBOOT_SECTOR_SIZE - 1));
-    uint32_t addr_off = addr & (WOLFBOOT_SECTOR_SIZE - 1);
+    uint32_t addr_align = addr & (~(NVM_CACHE_SIZE - 1));
+    uint32_t addr_off = addr & (NVM_CACHE_SIZE - 1);
     int ret = 0;
-    XMEMCPY(NVM_CACHE, (void *)addr_align, WOLFBOOT_SECTOR_SIZE);
-    ret = hal_flash_erase(addr_align, WOLFBOOT_SECTOR_SIZE);
+    XMEMCPY(NVM_CACHE, (void *)addr_align, NVM_CACHE_SIZE);
+    ret = hal_flash_erase(addr_align, NVM_CACHE_SIZE);
     if (ret != 0)
         return ret;
     NVM_CACHE[addr_off] = val;
-    ret = hal_flash_write(addr_align, NVM_CACHE, WOLFBOOT_SECTOR_SIZE);
+#if FLASHBUFFER_SIZE != WOLFBOOT_SECTOR_SIZE
+    addr_off = 0;
+    while ((addr_off < WOLFBOOT_SECTOR_SIZE) && (ret == 0)) {
+        ret = hal_flash_write(addr_align + addr_off, NVM_CACHE + addr_off, FLASHBUFFER_SIZE);
+        addr_off += FLASHBUFFER_SIZE;
+    }
+#else
+    ret = hal_flash_write(addr_align, NVM_CACHE, NVM_CACHE_SIZE);
+#endif
     return ret;
 }
 
@@ -433,6 +445,79 @@ static uint8_t hdr_cpy[IMAGE_HEADER_SIZE];
 static uint32_t hdr_cpy_done = 0;
 #endif
 
+static inline uint32_t im2n(uint32_t val)
+{
+#ifdef BIG_ENDIAN_ORDER
+    val = (((val & 0x000000FF) << 24) |
+           ((val & 0x0000FF00) <<  8) |
+           ((val & 0x00FF0000) >>  8) |
+           ((val & 0xFF000000) >> 24));
+#endif
+  return val;
+}
+
+
+static inline uint16_t im2ns(uint16_t val)
+{
+#ifdef BIG_ENDIAN_ORDER
+    val = (((val & 0x000000FF) << 8) |
+           ((val & 0x0000FF00) >>  8));
+#endif
+  return val;
+}
+
+#ifdef DELTA_UPDATES
+int wolfBoot_get_delta_info(uint8_t part, int inverse, uint32_t **img_offset, uint16_t **img_size)
+{
+    uint32_t *version_field = NULL;
+    uint32_t *magic = NULL;
+    uint8_t *image = (uint8_t *)0x00000000;
+    if(part == PART_UPDATE) {
+        if (PARTN_IS_EXT(PART_UPDATE))
+        {
+    #ifdef EXT_FLASH
+            ext_flash_check_read((uintptr_t)WOLFBOOT_PARTITION_UPDATE_ADDRESS, hdr_cpy, IMAGE_HEADER_SIZE);
+            hdr_cpy_done = 1;
+            image = hdr_cpy;
+    #endif
+        } else {
+            image = (uint8_t *)WOLFBOOT_PARTITION_UPDATE_ADDRESS;
+        }
+    } else if (part == PART_BOOT) {
+        if (PARTN_IS_EXT(PART_BOOT)) {
+    #ifdef EXT_FLASH
+            ext_flash_check_read((uintptr_t)WOLFBOOT_PARTITION_BOOT_ADDRESS, hdr_cpy, IMAGE_HEADER_SIZE);
+            hdr_cpy_done = 1;
+            image = hdr_cpy;
+    #endif
+        } else {
+            image = (uint8_t *)WOLFBOOT_PARTITION_BOOT_ADDRESS;
+        }
+    }
+    /* Don't check image against NULL to allow using address 0x00000000 */
+    magic = (uint32_t *)image;
+    if (*magic != WOLFBOOT_MAGIC)
+        return -1;
+    if (inverse) {
+        if (wolfBoot_find_header((uint8_t *)(image + IMAGE_HEADER_OFFSET),
+                    HDR_IMG_DELTA_INVERSE, (uint8_t **) img_offset) != sizeof(uint32_t)) {
+            return -1;
+        }
+        if (wolfBoot_find_header((uint8_t *)(image + IMAGE_HEADER_OFFSET),
+                    HDR_IMG_DELTA_INVERSE_SIZE, (uint8_t **) img_size) != sizeof(uint16_t)) {
+            return -1;
+        }
+    } else {
+        *img_offset = 0x0000000;
+        if (wolfBoot_find_header((uint8_t *)(image + IMAGE_HEADER_OFFSET),
+                    HDR_IMG_DELTA_SIZE, (uint8_t **)img_size) != sizeof(uint16_t)) {
+            return -1;
+        }
+    }
+    return 0;
+}
+#endif
+
 uint32_t wolfBoot_get_blob_version(uint8_t *blob)
 {
     uint32_t *version_field = NULL;
@@ -443,9 +528,10 @@ uint32_t wolfBoot_get_blob_version(uint8_t *blob)
     if (wolfBoot_find_header(blob + IMAGE_HEADER_OFFSET, HDR_VERSION, (void *)&version_field) == 0)
         return 0;
     if (version_field)
-        return *version_field;
+        return im2n(*version_field);
     return 0;
 }
+
 
 uint32_t wolfBoot_get_image_version(uint8_t part)
 {
@@ -546,17 +632,22 @@ uint16_t wolfBoot_get_image_type(uint8_t part)
             image = (uint8_t *)WOLFBOOT_PARTITION_BOOT_ADDRESS;
         }
     }
-    magic = (uint32_t *)image;
-    if (*magic != WOLFBOOT_MAGIC)
-        return 0;
-    if (wolfBoot_find_header(image + IMAGE_HEADER_OFFSET, HDR_IMG_TYPE, (void *)&type_field) == 0)
-        return 0;
-    if (type_field)
-        return *type_field;
+
+    if (image) {
+        magic = (uint32_t *)image;
+        if (*magic != WOLFBOOT_MAGIC)
+            return 0;
+        if (wolfBoot_find_header(image + IMAGE_HEADER_OFFSET, HDR_IMG_TYPE, (void *)&type_field) == 0)
+            return 0;
+        if (type_field)
+            return im2ns(*type_field);
+    }
+
     return 0;
 }
 
-#if defined(ARCH_AARCH64) || defined(DUALBANK_SWAP)
+#if defined(ARCH_AARCH64) || defined(DUALBANK_SWAP) || defined(PLATFORM_X86_64_EFI)
+
 int wolfBoot_fallback_is_possible(void)
 {
     uint32_t boot_v, update_v;
@@ -668,11 +759,14 @@ int RAMFUNCTION wolfBoot_erase_encrypt_key(void)
 
 #ifdef __WOLFBOOT
 
-static ChaCha chacha;
-static int chacha_initialized = 0;
-static uint8_t chacha_iv_nonce[ENCRYPT_NONCE_SIZE];
+static int encrypt_initialized = 0;
+static uint8_t encrypt_iv_nonce[ENCRYPT_NONCE_SIZE];
 
-static int chacha_init(void)
+#ifdef ENCRYPT_WITH_CHACHA
+
+ChaCha chacha;
+
+int chacha_init(void)
 {
     uint8_t *key = (uint8_t *)(WOLFBOOT_PARTITION_BOOT_ADDRESS + ENCRYPT_TMP_SECRET_OFFSET);
     uint8_t ff[ENCRYPT_KEY_SIZE];
@@ -686,11 +780,76 @@ static int chacha_init(void)
     if (XMEMCMP(key, ff, ENCRYPT_KEY_SIZE) == 0)
         return -1;
 
-    XMEMCPY(chacha_iv_nonce, stored_nonce, ENCRYPT_NONCE_SIZE);
+    XMEMCPY(encrypt_iv_nonce, stored_nonce, ENCRYPT_NONCE_SIZE);
     wc_Chacha_SetKey(&chacha, key, ENCRYPT_KEY_SIZE);
-    chacha_initialized = 1;
+    encrypt_initialized = 1;
     return 0;
 }
+
+#elif defined(ENCRYPT_WITH_AES128) || defined(ENCRYPT_WITH_AES256)
+
+/* Inline use of ByteReverseWord32 */
+#define WOLFSSL_MISC_INCLUDED
+#include <wolfcrypt/src/misc.c>
+
+Aes aes_dec, aes_enc;
+
+int aes_init(void)
+{
+    uint8_t *key = (uint8_t *)(WOLFBOOT_PARTITION_BOOT_ADDRESS + ENCRYPT_TMP_SECRET_OFFSET);
+    uint8_t ff[ENCRYPT_KEY_SIZE];
+    uint8_t iv_buf[ENCRYPT_BLOCK_SIZE];
+    uint8_t *stored_nonce = key + ENCRYPT_KEY_SIZE;
+
+    wc_AesInit(&aes_enc, NULL, 0);
+    wc_AesInit(&aes_dec, NULL, 0);
+
+    /* Check against 'all 0xff' or 'all zero' cases */
+    XMEMSET(ff, 0xFF, ENCRYPT_KEY_SIZE);
+    if (XMEMCMP(key, ff, ENCRYPT_KEY_SIZE) == 0)
+        return -1;
+    XMEMSET(ff, 0x00, ENCRYPT_KEY_SIZE);
+    if (XMEMCMP(key, ff, ENCRYPT_KEY_SIZE) == 0)
+        return -1;
+
+    XMEMCPY(encrypt_iv_nonce, stored_nonce, ENCRYPT_NONCE_SIZE);
+    XMEMCPY(iv_buf, stored_nonce, ENCRYPT_NONCE_SIZE);
+    /* AES_ENCRYPTION is used for both directions in CTR */
+    wc_AesSetKeyDirect(&aes_enc, key, ENCRYPT_KEY_SIZE, iv_buf, AES_ENCRYPTION);
+    wc_AesSetKeyDirect(&aes_dec, key, ENCRYPT_KEY_SIZE, iv_buf, AES_ENCRYPTION);
+    encrypt_initialized = 1;
+    return 0;
+}
+
+void aes_set_iv(uint8_t *nonce, uint32_t iv_ctr)
+{
+    uint32_t iv_buf[ENCRYPT_BLOCK_SIZE / sizeof(uint32_t)];
+    uint32_t iv_local_ctr;
+    int i;
+    XMEMCPY(iv_buf, nonce, ENCRYPT_NONCE_SIZE);
+#ifndef BIG_ENDIAN_ORDER
+    for (i = 0; i < 4; i++) {
+        iv_buf[i] = ByteReverseWord32(iv_buf[i]);
+    }
+#endif
+    iv_buf[3] += iv_ctr;
+    if(iv_buf[3] < iv_ctr) { /* overflow */
+        for (i = 2; i >= 0; i--) {
+            iv_buf[i]++;
+            if (iv_buf[i] != 0)
+                break;
+        }
+    }
+#ifndef BIG_ENDIAN_ORDER
+    for (i = 0; i < 4; i++) {
+        iv_buf[i] = ByteReverseWord32(iv_buf[i]);
+    }
+#endif
+    wc_AesSetIV(&aes_enc, (byte *)iv_buf);
+    wc_AesSetIV(&aes_dec, (byte *)iv_buf);
+}
+
+#endif
 
 
 static inline uint8_t part_address(uintptr_t a)
@@ -699,20 +858,19 @@ static inline uint8_t part_address(uintptr_t a)
 #if WOLFBOOT_PARTITION_UPDATE_ADDRESS != 0
         (a >= WOLFBOOT_PARTITION_UPDATE_ADDRESS) &&
 #endif
-        (a <= WOLFBOOT_PARTITION_UPDATE_ADDRESS + WOLFBOOT_PARTITION_SIZE))
+        (a < WOLFBOOT_PARTITION_UPDATE_ADDRESS + WOLFBOOT_PARTITION_SIZE))
         return PART_UPDATE;
     if ( 1 &&
 #if WOLFBOOT_PARTITION_SWAP_ADDRESS != 0
         (a >= WOLFBOOT_PARTITION_SWAP_ADDRESS) &&
 #endif
-        (a <= WOLFBOOT_PARTITION_SWAP_ADDRESS + WOLFBOOT_SECTOR_SIZE))
+        (a < WOLFBOOT_PARTITION_SWAP_ADDRESS + WOLFBOOT_SECTOR_SIZE))
         return PART_SWAP;
     return PART_NONE;
 }
 
 int ext_flash_encrypt_write(uintptr_t address, const uint8_t *data, int len)
 {
-    uint32_t iv_counter;
     uint8_t block[ENCRYPT_BLOCK_SIZE];
     uint8_t part;
     int sz = len;
@@ -727,25 +885,20 @@ int ext_flash_encrypt_write(uintptr_t address, const uint8_t *data, int len)
     if (sz < ENCRYPT_BLOCK_SIZE) {
         sz = ENCRYPT_BLOCK_SIZE;
     }
-    if (!chacha_initialized)
-        if (chacha_init() < 0)
+    if (!encrypt_initialized)
+        if (crypto_init() < 0)
             return -1;
     part = part_address(address);
     switch(part) {
         case PART_UPDATE:
-            iv_counter = (address - WOLFBOOT_PARTITION_UPDATE_ADDRESS) / ENCRYPT_BLOCK_SIZE;
-            /* Do not encrypt last sectors */
-            if (iv_counter >= (START_FLAGS_OFFSET - ENCRYPT_BLOCK_SIZE) / ENCRYPT_BLOCK_SIZE) {
+            /* do not encrypt flag sector */
+            if (address - WOLFBOOT_PARTITION_UPDATE_ADDRESS >= START_FLAGS_OFFSET) {
                 return ext_flash_write(address, data, len);
             }
             break;
         case PART_SWAP:
-            {
-                uint32_t row_number;
-                row_number = (address - WOLFBOOT_PARTITION_SWAP_ADDRESS) / ENCRYPT_BLOCK_SIZE;
-                iv_counter = row_number;
-                break;
-            }
+            /* data is coming from update and is already encrypted */
+            return ext_flash_write(address, data, len);
         default:
             return -1;
     }
@@ -754,19 +907,15 @@ int ext_flash_encrypt_write(uintptr_t address, const uint8_t *data, int len)
         if (ext_flash_read(row_address, block, ENCRYPT_BLOCK_SIZE) != ENCRYPT_BLOCK_SIZE)
             return -1;
         XMEMCPY(block + row_offset, data, step);
-        wc_Chacha_SetIV(&chacha, chacha_iv_nonce, iv_counter);
-        wc_Chacha_Process(&chacha, enc_block, block, ENCRYPT_BLOCK_SIZE);
+        crypto_encrypt(enc_block, block, ENCRYPT_BLOCK_SIZE);
         ext_flash_write(row_address, enc_block, ENCRYPT_BLOCK_SIZE);
         address += step;
         data += step;
         sz -= step;
-        iv_counter++;
     }
     for (i = 0; i < sz / ENCRYPT_BLOCK_SIZE; i++) {
-        wc_Chacha_SetIV(&chacha, chacha_iv_nonce, iv_counter);
         XMEMCPY(block, data + (ENCRYPT_BLOCK_SIZE * i), ENCRYPT_BLOCK_SIZE);
-        wc_Chacha_Process(&chacha, ENCRYPT_CACHE + (ENCRYPT_BLOCK_SIZE * i), block, ENCRYPT_BLOCK_SIZE);
-        iv_counter++;
+        crypto_encrypt(ENCRYPT_CACHE + (ENCRYPT_BLOCK_SIZE * i), block, ENCRYPT_BLOCK_SIZE);
     }
     return ext_flash_write(address, ENCRYPT_CACHE, len);
 }
@@ -788,8 +937,8 @@ int ext_flash_decrypt_read(uintptr_t address, uint8_t *data, int len)
     if (sz < ENCRYPT_BLOCK_SIZE) {
         sz = ENCRYPT_BLOCK_SIZE;
     }
-    if (!chacha_initialized)
-        if (chacha_init() < 0)
+    if (!encrypt_initialized)
+        if (crypto_init() < 0)
             return -1;
     part = part_address(row_address);
     switch(part) {
@@ -799,12 +948,10 @@ int ext_flash_decrypt_read(uintptr_t address, uint8_t *data, int len)
             if (iv_counter >= (START_FLAGS_OFFSET - ENCRYPT_BLOCK_SIZE) / ENCRYPT_BLOCK_SIZE) {
                 return ext_flash_read(address, data, len);
             }
+            crypto_set_iv(encrypt_iv_nonce, iv_counter);
             break;
         case PART_SWAP:
             {
-                uint32_t row_number;
-                row_number = (address - WOLFBOOT_PARTITION_SWAP_ADDRESS) / ENCRYPT_BLOCK_SIZE;
-                iv_counter = row_number;
                 break;
             }
         default:
@@ -815,8 +962,7 @@ int ext_flash_decrypt_read(uintptr_t address, uint8_t *data, int len)
         int step = ENCRYPT_BLOCK_SIZE - row_offset;
         if (ext_flash_read(row_address, block, ENCRYPT_BLOCK_SIZE) != ENCRYPT_BLOCK_SIZE)
             return -1;
-        wc_Chacha_SetIV(&chacha, chacha_iv_nonce, iv_counter);
-        wc_Chacha_Process(&chacha, dec_block, block, ENCRYPT_BLOCK_SIZE);
+        crypto_decrypt(dec_block, block, ENCRYPT_BLOCK_SIZE);
         XMEMCPY(data, dec_block + row_offset, step);
         address += step;
         data += step;
@@ -826,9 +972,8 @@ int ext_flash_decrypt_read(uintptr_t address, uint8_t *data, int len)
     if (ext_flash_read(address, data, sz) != sz)
         return -1;
     for (i = 0; i < sz / ENCRYPT_BLOCK_SIZE; i++) {
-        wc_Chacha_SetIV(&chacha, chacha_iv_nonce, iv_counter);
         XMEMCPY(block, data + (ENCRYPT_BLOCK_SIZE * i), ENCRYPT_BLOCK_SIZE);
-        wc_Chacha_Process(&chacha, data + (ENCRYPT_BLOCK_SIZE * i), block, ENCRYPT_BLOCK_SIZE);
+        crypto_decrypt(data + (ENCRYPT_BLOCK_SIZE * i), block, ENCRYPT_BLOCK_SIZE);
         iv_counter++;
     }
     return len;

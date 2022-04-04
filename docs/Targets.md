@@ -6,6 +6,7 @@ This README describes configuration of supported targets.
 
 * [Cortex-A53 / Raspberry PI 3](#cortex-a53--raspberry-pi-3-experimental)
 * [Cypress PSoC-6](#cypress-psoc-6)
+* [Nordic nRF52840](#nordic-nrf52840)
 * [NXP LPC54xxx](#nxp-lpc54xxx)
 * [NXP iMX-RT](#nxp-imx-rt)
 * [NXP Kinetis](#nxp-kinetis)
@@ -17,10 +18,12 @@ This README describes configuration of supported targets.
 * [STM32G0](#stm32g0)
 * [STM32H7](#stm32h7)
 * [STM32L5](#stm32l5)
+* [STM32U5](#stm32u5)
 * [STM32L0](#stm32l0)
 * [STM32WB55](#stm32wb55)
 * [TI Hercules TMS570LC435](#ti-hercules-tms570lc435)
 * [Xilinx Zynq UltraScale](#xilinx-zynq-ultrascale)
+* [Qemu x86_64 UEFI](#qemu-x86_64-uefi)
 
 ## STM32F4
 
@@ -80,6 +83,8 @@ mon reset init
 b main
 c
 ```
+
+
 ## STM32L4
 Example 1MB partitioning on STM32L4
 
@@ -101,11 +106,11 @@ Example 1MB partitioning on STM32L4
 
 #### Example Description
 
-The implementation shows how to switch from secure application to non-secure application
-thanks to the system isolation performed to split the internal Flash and internal SRAM memories
-into two halves:
- - the first half for the secure application
- - the second half for the non-secure application
+The implementation shows how to switch from secure application to non-secure application,
+thanks to the system isolation performed, which splits the internal Flash and internal
+SRAM memories into two halves:
+ - the first half for secure application
+ - the second half for non-secure application
 
 #### Hardware and Software environment
 
@@ -152,7 +157,7 @@ The flash memory is segmented into two different banks:
   - Bank 0: (0x08000000)
   - Bank 1: (0x08040000)
 
-Bank 0 contains the bootloader at address 0x08000000, and the application at address 0x08008000.
+Bank 0 contains the bootloader at address 0x08000000, and the application at address 0x08040000.
 When a valid image is available at the same offset in Bank 1, a candidate is selected for booting between the two valid images.
 A firmware update can be uploaded at address 0x08048000.
 
@@ -198,7 +203,114 @@ arm-none-eabi-gdb
 add-symbol-file test-app/image.elf
 mon reset init
 ```
+## STM32U5
 
+### Scenario 1: TrustZone Enabled
+
+#### Example Description
+
+The implementation shows how to switch from secure application to non-secure application,
+thanks to the system isolation performed, which splits the internal Flash and internal
+SRAM memories into two halves:
+ - the first half for secure application
+ - the second half for non-secure application
+
+#### Hardware and Software environment
+
+- This example runs on STM32U585AII6Q devices with security enabled (TZEN=1).
+- This example has been tested with STMicroelectronics B-U585I-IOT02A (MB1551)
+- User Option Bytes requirement (with STM32CubeProgrammer tool - see below for instructions)
+
+```
+TZEN = 1                            System with TrustZone-M enabled
+DBANK = 1                           Dual bank mode
+SECWM1_PSTRT=0x0  SECWM1_PEND=0x7F  All 128 pages of internal Flash Bank1 set as secure
+SECWM2_PSTRT=0x1  SECWM2_PEND=0x0   No page of internal Flash Bank2 set as secure, hence Bank2 non-secure
+```
+
+- NOTE: STM32CubeProgrammer V2.8.0 or newer is required
+
+#### How to use it
+
+1. `cp ./config/examples/stm32u5.config .config`
+2. `make TZEN=1`
+3. Prepare board with option bytes configuration reported above
+    - `STM32_Programmer_CLI -c port=swd mode=hotplug -ob TZEN=1 DBANK=1`
+    - `STM32_Programmer_CLI -c port=swd mode=hotplug -ob SECWM1_PSTRT=0x0 SECWM1_PEND=0x7F SECWM2_PSTRT=0x1 SECWM2_PEND=0x0`
+4. flash wolfBoot.bin to 0x0c00 0000
+    - `STM32_Programmer_CLI -c port=swd -d ./wolfboot.bin 0x0C000000`
+5. flash .\test-app\image_v1_signed.bin to 0x0804 0000
+    - `STM32_Programmer_CLI -c port=swd -d ./test-app/image_v1_signed.bin 0x08100000`
+6. RED LD9 will be on
+
+- NOTE: STM32_Programmer_CLI Default Locations
+* Windows: `C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe`
+* Linux: `/usr/local/STMicroelectronics/STM32Cube/STM32CubeProgrammer/bin/STM32_Programmer_CLI`
+* Mac OS/X: `/Applications/STMicroelectronics/STM32Cube/STM32CubeProgrammer/STM32CubeProgrammer.app/Contents/MacOs/bin/STM32_Programmer_CLI`
+
+### Scenario 2: TrustZone Disabled
+
+#### Example Description
+
+The implementation shows how to use STM32U5xx in DUAL_BANK mode, with TrustZone disabled.
+The DUAL_BANK option is only available on this target when TrustZone is disabled (TZEN = 0).
+
+The flash memory is segmented into two different banks:
+
+  - Bank 0: (0x08000000)
+  - Bank 1: (0x08100000)
+
+Bank 0 contains the bootloader at address 0x08000000, and the application at address 0x08100000.
+When a valid image is available at the same offset in Bank 1, a candidate is selected for booting between the two valid images.
+A firmware update can be uploaded at address 0x08108000.
+
+The example configuration is available in [/config/examples/stm32u5-nonsecure-dualbank.config](/config/examples/stm32u5-nonsecure-dualbank.config).
+
+To run flash `./test-app/image.bin` to `0x08000000`.
+    - `STM32_Programmer_CLI -c port=swd -d ./test-app/image.bin 0x08000000`
+
+Or program each partition using:
+1. flash `wolfboot.bin` to 0x08000000:
+    - `STM32_Programmer_CLI -c port=swd -d ./wolfboot.elf`
+2. flash `image_v1_signed.bin` to 0x08008000
+    - `STM32_Programmer_CLI -c port=swd -d ./test-app/image_v1_signed.bin 0x08008000`
+
+RED LD9 will be on indicating successful boot ()
+
+### Debugging
+
+Use `make DEBUG=1` and reload firmware.
+
+- STM32CubeIDE v.1.7.0 required
+- Run the debugger via:
+
+Linux:
+
+```
+ST-LINK_gdbserver -d -cp /opt/st/stm32cubeide_1.3.0/plugins/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.linux64_1.3.0.202002181050/tools/bin -e -r 1 -p 3333`
+```
+
+Max OS/X:
+
+```sh
+sudo ln -s /Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.stlink-gdb-server.macos64_1.6.0.202101291314/tools/bin/native/mac_x64/libSTLinkUSBDriver.dylib /usr/local/lib/libSTLinkUSBDriver.dylib
+
+/Applications/STM32CubeIDE.app/Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.stlink-gdb-server.macos64_1.6.0.202101291314/tools/bin/ST-LINK_gdbserver -d -cp ./Contents/Eclipse/plugins/com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.macos64_1.6.0.202101291314/tools/bin -e -r 1 -p 3333
+```
+
+Win:
+
+```
+ST-LINK_gdbserver -d -cp C:\ST\STM32CubeIDE_1.7.0\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.externaltools.cubeprogrammer.win32_2.0.0.202105311346\tools\bin -e -r 1 -p 3333`
+```
+- Connect with arm-none-eabi-gdb
+
+wolfBoot has a .gdbinit to configure
+```
+arm-none-eabi-gdb
+add-symbol-file test-app/image.elf
+mon reset init
+```
 
 ## STM32L0
 
@@ -233,14 +345,14 @@ Example 128KB partitioning on STM32-G070:
 
 - Sector size: 2KB
 - Wolfboot partition size: 32KB
-- Application partition size: 45 KB
+- Application partition size: 44 KB
 
 ```C
 #define WOLFBOOT_SECTOR_SIZE                 0x800   /* 2 KB */
-#define WOLFBOOT_PARTITION_BOOT_ADDRESS      0x8000
-#define WOLFBOOT_PARTITION_SIZE              0xB000 /* 45 KB */
-#define WOLFBOOT_PARTITION_UPDATE_ADDRESS    0x13000
-#define WOLFBOOT_PARTITION_SWAP_ADDRESS      0x1E000
+#define WOLFBOOT_PARTITION_BOOT_ADDRESS      0x08008000
+#define WOLFBOOT_PARTITION_SIZE              0xB000  /* 44 KB */
+#define WOLFBOOT_PARTITION_UPDATE_ADDRESS    0x08013000
+#define WOLFBOOT_PARTITION_SWAP_ADDRESS      0x0801E000
 ```
 
 ### Building STM32G0
@@ -254,17 +366,38 @@ The option `CORTEX_M0` is automatically selected for this target.
 The option `NVM_FLASH_WRITEONCE=1` is mandatory on this target, since the IAP driver does not support
 multiple writes after each erase operation.
 
-Compile requirements:
-`make TARGET=stm32g0 NVM_FLASH_WRITEONCE=1`
-
-### Debugging STM32G0
-
-Use `make DEBUG=1` and reload firmware.
+This target also supports secure memory protection on the bootloader region 
+using the `FLASH_CR:SEC_PROT` and `FLASH_SECT:SEC_SIZE` registers. This is the 
+number of 2KB pages to block access to from the 0x8000000 base address.
 
 ```
-st-flash write factory.bin 0x08000000
+STM32_Programmer_CLI -c port=swd mode=hotplug -ob SEC_SIZE=0x10
+```
 
-# Start GDB server
+For RAMFUNCTION support (required for SEC_PROT) make sure `RAM_CODE=1`.
+
+### STM32G0 Programming
+
+Compile requirements: `make TARGET=stm32g0 NVM_FLASH_WRITEONCE=1`
+
+The output is a single `factory.bin` that includes `wolfboot.bin` and `test-app/image_v1_signed.bin` combined together. 
+This should be programmed to the flash start address `0x08000000`.
+
+Flash using the STM32CubeProgrammer CLI:
+
+```
+STM32_Programmer_CLI -c port=swd -d factory.bin 0x08000000
+```
+
+### STM32G0 Debugging
+
+Use `make DEBUG=1` and program firmware again.
+
+Start GDB server on port 3333:
+
+```
+ST-LINK_gdbserver -d -e -r 1 -p 3333
+OR
 st-util -p 3333
 ```
 
@@ -566,52 +699,26 @@ The STM32H7 build can be built using:
 make TARGET=stm32h7 SIGN=ECC256
 ```
 
-### Loading the firmware
+### STM32H7 Programming
 
-OpenOCD configuration for flashing/debugging, can be copied into `openocd.cfg` in your working directory:
-Note: May require OpenOCD 0.10.0 or greater for the STM32H7x support.
-
+ST-Link Flash Tools:
 ```
-source [find interface/stlink.cfg]
-source [find target/stm32h7x.cfg]
-$_CHIPNAME.cpu0 configure -event reset-init {
-    mmw 0xe0042004 0x7 0x0
-}
-init
-reset
-halt
+st-flash write factory.bin 0x08000000
+```
+OR
+```
+st-flash write wolfboot.bin 0x08000000
+st-flash write test-app/image_v1_signed.bin 0x08020000
 ```
 
-`openocd --file openocd.cfg`
+### STM32H7 Testing
 
-OpenOCD can be either run in background (to allow remote GDB and monitor terminal connections), or
-directly from command line, to execute terminal scripts.
+To sign the same application image as new version (2), use the sign tools
 
-If OpenOCD is running, local TCP port 4444 can be used to access an interactive terminal prompt.
+Python: `tools/keytools/sign.py --ecc256 --sha256 test-app/image.bin ecc256.der 2`
+C Tool: `tools/keytools/sign    --ecc256 --sha256 test-app/image.bin ecc256.der 2`
 
-Using the following openocd commands, the initial images for wolfBoot and the test application
-are loaded to flash in bank 0:
-
-```
-telnet localhost 4444
-flash write_image unlock erase wolfboot.bin 0x08000000
-flash verify_bank 0 wolfboot.bin
-flash write_image unlock erase test-app/image_v1_signed.bin 0x08020000
-flash verify_bank 0 test-app/image_v1_signed.bin 0x08020000
-reset
-```
-
-To sign the same application image as new version (2), use the python script `sign.py` provided:
-
-```
-tools/keytools/sign.py test-app/image.bin ecc256.der 2
-```
-
-From OpenOCD, the updated image (version 2) can be flashed to the second bank:
-```
-flash write_image unlock erase test-app/image_v2_signed.bin 0x08120000
-flash verify_bank 0 test-app/image_v1_signed.bin 0x20000
-```
+Flash the updated version 2 image: `st-flash write test-app/image_v2_signed.bin 0x08120000`
 
 Upon reboot, wolfboot will elect the best candidate (version 2 in this case) and authenticate the image.
 If the accepted candidate image resides on BANK B (like in this case), wolfBoot will perform one bank swap before
@@ -619,18 +726,18 @@ booting.
 
 ### STM32H7 Debugging
 
-Debugging with OpenOCD:
+1. Start GDB server
 
-Use the OpenOCD configuration from the previous section to run OpenOCD.
+ST-Link: `st-util -p 3333`
 
-From another console, connect using gdb, e.g.:
+2. Start GDB Client from wolfBoot root:
 
-Add wolfboot.elf to the make.
-
-```
-arm-none-eabi-gdb wolfboot.elf -ex "set remotetimeout 240" -ex "target extended-remote localhost:3333"
-(gdb) add-symbol-file test-app/image.elf 0x08020000
-(gdb) add-symbol-file wolfboot.elf 0x08000000
+```sh
+arm-none-eabi-gdb
+add-symbol-file test-app/image.elf 0x08020000
+mon reset init
+b main
+c
 ```
 
 
@@ -920,3 +1027,108 @@ to compile.
 ## TI Hercules TMS570LC435
 
 See [/config/examples/ti-tms570lc435.config](/config/examples/ti-tms570lc435.config) for example configuration.
+
+
+## Qemu x86-64 UEFI
+
+x86-64bit machine with UEFI bios can run wolfBoot as EFI application.
+
+### Prerequisites:
+
+ * qemu-system-x86_64
+ * [GNU-EFI] (https://sourceforge.net/projects/gnu-efi/) 
+ * Open Virtual Machine firmware bios images (OVMF) by [Tianocore](https://tianocore.org)
+
+On a debian-like system it is sufficient to install the packages as follows:
+
+```
+# for wolfBoot and others
+apt install git make gcc
+
+# for test scripts
+apt install sudo dosfstools curl
+apt install qemu qemu-system-x86 ovmf gnu-efi
+
+# for buildroot
+apt install file bzip2 g++ wget cpio unzip rsync bc
+```
+
+### Configuration
+
+An example configuration is provided in [config/examples/x86_64_efi.config](config/examples/x86_64_efi.config)
+
+### Building and running on qemu
+
+The bootloader and the initialization script `startup.nsh` for execution in the EFI environment are stored in a loopback FAT partition.
+
+The script [tools/efi/prepare_uefi_partition.sh](tools/efi/prepare_uefi_partition.sh) creates a new empty
+FAT loopback partitions and adds `startup.nsh`.
+
+A kernel with an embedded rootfs partition can be now created and added to the image, via the
+script [tools/efi/compile_efi_linux.sh](tools/efi/compile_efi_linux.sh). The script actually adds two instances
+of the target systems: `kernel.img` and `update.img`, both signed for authentication, and tagged with version
+`1` and `2` respectively.
+
+Compiling with `make` will produce the bootloader image in `wolfboot.efi`.
+
+
+The script [tools/efi/run_efi.sh](tools/efi/run_efi.sh) will add `wolfboot.efi` to the bootloader loopback
+partition, and run the system on qemu. If both kernel images are present and valid, wolfBoot will choose the image
+with the higher version number, so `update.img` will be staged as it's tagged with version `2`.
+
+The sequence is summarized below:
+
+```
+cp config/examples/x86_64_efi.config .config
+tools/efi/prepare_efi_partition.sh
+make
+tools/efi/compile_efi_linux.sh
+tools/efi/run_efi.sh
+```
+
+```
+EFI v2.70 (EDK II, 0x00010000)
+[700/1832]
+Mapping table
+      FS0: Alias(s):F0a:;BLK0:
+          PciRoot(0x0)/Pci(0x1,0x1)/Ata(0x0)
+     BLK1: Alias(s):
+               PciRoot(0x0)/Pci(0x1,0x1)/Ata(0x0)
+Press ESC in 1 seconds to skip startup.nsh or any other key to continue.
+Starting wolfBoot EFI...
+Image base: 0xE3C6000
+Opening file: kernel.img, size: 6658272
+Opening file: update.img, size: 6658272
+Active Part 1
+Firmware Valid
+Booting at 0D630000
+Staging kernel at address D630100, size: 6658016
+```
+
+You can `Ctrl-C` or login as `root` and power off qemu with `poweroff`
+
+
+## Nordic nRF52840
+
+We have full Nordic nRF5280 examples for Contiki and RIOT-OS in our [wolfBoot-examples repo](https://github.com/wolfSSL/wolfboot-examples)
+
+Examples for nRF52:
+* RIOT-OS: https://github.com/wolfSSL/wolfBoot-examples/tree/master/riotOS-nrf52840dk-ble
+* Contiki-OS: https://github.com/wolfSSL/wolfBoot-examples/tree/master/contiki-nrf52
+
+Example of flash memory layout and configuration on the nRF52:
+
+  - 0x000000 - 0x01efff : Reserved for Nordic SoftDevice binary
+  - 0x01f000 - 0x02efff : Bootloader partition for wolfBoot
+  - 0x02f000 - 0x056fff : Active (boot) partition
+  - 0x057000 - 0x057fff : Unused
+  - 0x058000 - 0x07ffff : Upgrade partition
+
+```c
+#define WOLFBOOT_SECTOR_SIZE              4096
+#define WOLFBOOT_PARTITION_SIZE           0x28000
+
+#define WOLFBOOT_PARTITION_BOOT_ADDRESS   0x2f000
+#define WOLFBOOT_PARTITION_SWAP_ADDRESS   0x57000
+#define WOLFBOOT_PARTITION_UPDATE_ADDRESS 0x58000
+```
