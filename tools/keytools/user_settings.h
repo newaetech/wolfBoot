@@ -45,9 +45,16 @@
 #define HAVE_ECC
 #define WOLFSSL_HAVE_SP_ECC
 #define ECC_TIMING_RESISTANT
+#define HAVE_ECC256
+#define HAVE_ECC384
+#define HAVE_ECC521
 
 /* ED25519 */
 #define HAVE_ED25519
+
+/* ED448 */
+#define HAVE_ED448
+#define WOLFSSL_SHAKE256
 
 /* RSA */
 #define HAVE_RSA
@@ -64,7 +71,6 @@
 #define HAVE_CHACHA
 
 /* Disables */
-#define NO_AES
 #define NO_CMAC
 #define NO_HMAC
 #define NO_RC4

@@ -11,24 +11,34 @@ CC      = gcc
 WOLFBOOTDIR = ../..
 WOLFDIR = $(WOLFBOOTDIR)/lib/wolfssl/
 CFLAGS  = -Wall -Wextra -Werror
-CFLAGS  += -I. -DWOLFSSL_USER_SETTINGS -I$(WOLFDIR) -I$(WOLFBOOTDIR)/include
+CFLAGS  += -I. -DWOLFSSL_USER_SETTINGS -I$(WOLFDIR) -I$(WOLFBOOTDIR)/include -DWOLFBOOT_KEYTOOLS -DWOLFSSL_AES_DIRECT -DWOLFSSL_AES_COUNTER
 
 # option variables
 DEBUG_FLAGS     = -g -DDEBUG -DDEBUG_SIGNTOOL -DDEBUG_WOLFSSL -DDEBUG_WOLFSSL_VERBOSE
-OPTIMIZE        = -Os
+OPTIMIZE        = -O2
 
 # Options
 #CFLAGS+=$(DEBUG_FLAGS)
 CFLAGS+=$(OPTIMIZE)
 
+ifeq ($(IMAGE_HEADER_SIZE),)
+  IMAGE_HEADER_SIZE=256
+endif
+
+CFLAGS+=-DIMAGE_HEADER_SIZE=$(IMAGE_HEADER_SIZE)
+
 # Sources
 SRC=$(WOLFDIR)wolfcrypt/src/asn.c \
+	$(WOLFDIR)wolfcrypt/src/aes.c \
 	$(WOLFDIR)wolfcrypt/src/ecc.c \
 	$(WOLFDIR)wolfcrypt/src/coding.c \
 	$(WOLFDIR)wolfcrypt/src/chacha.c \
 	$(WOLFDIR)wolfcrypt/src/ed25519.c \
+	$(WOLFDIR)wolfcrypt/src/ed448.c \
 	$(WOLFDIR)wolfcrypt/src/fe_operations.c \
 	$(WOLFDIR)wolfcrypt/src/ge_operations.c \
+	$(WOLFDIR)wolfcrypt/src/fe_448.c \
+	$(WOLFDIR)wolfcrypt/src/ge_448.c \
 	$(WOLFDIR)wolfcrypt/src/hash.c \
 	$(WOLFDIR)wolfcrypt/src/logging.c \
 	$(WOLFDIR)wolfcrypt/src/memory.c \

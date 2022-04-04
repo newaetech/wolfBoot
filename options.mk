@@ -10,8 +10,12 @@ endif
 ifeq ($(SIGN),NONE)
   SIGN_OPTIONS+=--no-sign
   PRIVATE_KEY=
-  STACK_USAGE=1024
+  STACK_USAGE=1180
   CFLAGS+=-DWOLFBOOT_NO_SIGN
+endif
+
+ifeq ($(IMAGE_HEADER_SIZE),)
+  IMAGE_HEADER_SIZE=256
 endif
 
 ifeq ($(WOLFBOOT_SMALL_STACK),1)
@@ -42,6 +46,63 @@ ifeq ($(SIGN),ECC256)
     STACK_USAGE=3896
   endif
   PUBLIC_KEY_OBJS=./src/ecc256_pub_key.o
+  ifeq ($(shell test $(IMAGE_HEADER_SIZE) -lt 256; echo $$?),0)
+    IMAGE_HEADER_SIZE=256
+  endif
+endif
+
+ifeq ($(SIGN),ECC384)
+  KEYGEN_OPTIONS+=--ecc384
+  SIGN_OPTIONS+=--ecc384
+  PRIVATE_KEY=ecc384.der
+  WOLFCRYPT_OBJS+= \
+    $(MATH_OBJS) \
+    ./lib/wolfssl/wolfcrypt/src/ecc.o \
+    ./lib/wolfssl/wolfcrypt/src/memory.o \
+    ./lib/wolfssl/wolfcrypt/src/wc_port.o \
+    ./lib/wolfssl/wolfcrypt/src/wolfmath.o \
+    ./lib/wolfssl/wolfcrypt/src/hash.o
+  CFLAGS+=-D"WOLFBOOT_SIGN_ECC384"
+  ifeq ($(WOLFBOOT_SMALL_STACK),1)
+       STACK_USAGE=5880
+  else ifeq ($(WOLFTPM),1)
+    STACK_USAGE=6680
+  else ifneq ($(SPMATH),1)
+    STACK_USAGE=6056
+  else
+    STACK_USAGE=5880
+  endif
+  PUBLIC_KEY_OBJS=./src/ecc384_pub_key.o
+  ifeq ($(shell test $(IMAGE_HEADER_SIZE) -lt 512; echo $$?),0)
+    IMAGE_HEADER_SIZE=512
+  endif
+endif
+
+ifeq ($(SIGN),ECC521)
+  KEYGEN_OPTIONS+=--ecc521
+  SIGN_OPTIONS+=--ecc521
+  PRIVATE_KEY=ecc521.der
+  WOLFCRYPT_OBJS+= \
+    $(MATH_OBJS) \
+    ./lib/wolfssl/wolfcrypt/src/ecc.o \
+    ./lib/wolfssl/wolfcrypt/src/memory.o \
+    ./lib/wolfssl/wolfcrypt/src/wc_port.o \
+    ./lib/wolfssl/wolfcrypt/src/wolfmath.o \
+    ./lib/wolfssl/wolfcrypt/src/hash.o
+  CFLAGS+=-D"WOLFBOOT_SIGN_ECC521"
+  ifeq ($(WOLFBOOT_SMALL_STACK),1)
+       STACK_USAGE=4096
+  else ifeq ($(WOLFTPM),1)
+    STACK_USAGE=6680
+  else ifneq ($(SPMATH),1)
+    STACK_USAGE=7352
+  else
+    STACK_USAGE=3896
+  endif
+  PUBLIC_KEY_OBJS=./src/ecc521_pub_key.o
+  ifeq ($(shell test $(IMAGE_HEADER_SIZE) -lt 512; echo $$?),0)
+    IMAGE_HEADER_SIZE=512
+  endif
 endif
 
 ifeq ($(SIGN),ED25519)
@@ -57,14 +118,44 @@ ifeq ($(SIGN),ED25519)
     ./lib/wolfssl/wolfcrypt/src/fe_low_mem.o
   PUBLIC_KEY_OBJS=./src/ed25519_pub_key.o
   CFLAGS+=-D"WOLFBOOT_SIGN_ED25519"
-  STACK_USAGE?=1024
+  STACK_USAGE?=1180
+  ifeq ($(shell test $(IMAGE_HEADER_SIZE) -lt 256; echo $$?),0)
+    IMAGE_HEADER_SIZE=256
+  endif
+endif
+
+ifeq ($(SIGN),ED448)
+  KEYGEN_OPTIONS+=--ed448
+  SIGN_OPTIONS+=--ed448
+  PRIVATE_KEY=ed448.der
+  WOLFCRYPT_OBJS+= ./lib/wolfssl/wolfcrypt/src/ed448.o \
+    ./lib/wolfssl/wolfcrypt/src/ge_low_mem.o \
+    ./lib/wolfssl/wolfcrypt/src/ge_448.o \
+    ./lib/wolfssl/wolfcrypt/src/fe_448.o \
+    ./lib/wolfssl/wolfcrypt/src/hash.o \
+    ./lib/wolfssl/wolfcrypt/src/wolfmath.o \
+    ./lib/wolfssl/wolfcrypt/src/wc_port.o \
+    ./lib/wolfssl/wolfcrypt/src/fe_low_mem.o
+  ifeq ($(WOLFBOOT_SMALL_STACK),1)
+    STACK_USAGE?=1024
+  else
+    STACK_USAGE?=4376
+  endif
+
+  ifneq ($(HASH),SHA3)
+    WOLFCRYPT_OBJS+=./lib/wolfssl/wolfcrypt/src/sha3.o
+  endif
+  PUBLIC_KEY_OBJS=./src/ed448_pub_key.o
+  CFLAGS+=-D"WOLFBOOT_SIGN_ED448"
+  ifeq ($(shell test $(IMAGE_HEADER_SIZE) -lt 512; echo $$?),0)
+    IMAGE_HEADER_SIZE=512
+  endif
 endif
 
 ifeq ($(SIGN),RSA2048)
   KEYGEN_OPTIONS+=--rsa2048
   SIGN_OPTIONS+=--rsa2048
   PRIVATE_KEY=rsa2048.der
-  IMAGE_HEADER_SIZE=512
   WOLFCRYPT_OBJS+= \
     $(RSA_EXTRA_OBJS) \
     $(MATH_OBJS) \
@@ -73,8 +164,7 @@ ifeq ($(SIGN),RSA2048)
     ./lib/wolfssl/wolfcrypt/src/hash.o \
     ./lib/wolfssl/wolfcrypt/src/wc_port.o
   PUBLIC_KEY_OBJS=./src/rsa2048_pub_key.o
-  CFLAGS+=-D"WOLFBOOT_SIGN_RSA2048" $(RSA_EXTRA_CFLAGS) \
-		  -D"IMAGE_HEADER_SIZE=512"
+  CFLAGS+=-D"WOLFBOOT_SIGN_RSA2048" $(RSA_EXTRA_CFLAGS)
   ifeq ($(WOLFBOOT_SMALL_STACK),1)
     ifneq ($(SPMATH),1)
       STACK_USAGE=5008
@@ -88,13 +178,15 @@ ifeq ($(SIGN),RSA2048)
   else
     STACK_USAGE=12288
   endif
+  ifeq ($(shell test $(IMAGE_HEADER_SIZE) -lt 512; echo $$?),0)
+    IMAGE_HEADER_SIZE=512
+  endif
 endif
 
 ifeq ($(SIGN),RSA4096)
   KEYGEN_OPTIONS+=--rsa4096
   SIGN_OPTIONS+=--rsa4096
   PRIVATE_KEY=rsa4096.der
-  IMAGE_HEADER_SIZE=1024
   WOLFCRYPT_OBJS+= \
     $(RSA_EXTRA_OBJS) \
     $(MATH_OBJS) \
@@ -103,8 +195,7 @@ ifeq ($(SIGN),RSA4096)
     ./lib/wolfssl/wolfcrypt/src/hash.o \
     ./lib/wolfssl/wolfcrypt/src/wc_port.o
   PUBLIC_KEY_OBJS=./src/rsa4096_pub_key.o
-  CFLAGS+=-D"WOLFBOOT_SIGN_RSA4096" $(RSA_EXTRA_CFLAGS) \
-		  -D"IMAGE_HEADER_SIZE=1024"
+  CFLAGS+=-D"WOLFBOOT_SIGN_RSA4096" $(RSA_EXTRA_CFLAGS)
   ifeq ($(WOLFBOOT_SMALL_STACK),1)
     ifneq ($(SPMATH),1)
       STACK_USAGE=5888
@@ -117,6 +208,9 @@ ifeq ($(SIGN),RSA4096)
     STACK_USAGE=69232
   else
     STACK_USAGE=18064
+  endif
+  ifeq ($(shell test $(IMAGE_HEADER_SIZE) -lt 1024; echo $$?),0)
+    IMAGE_HEADER_SIZE=1024
   endif
 endif
 
@@ -154,7 +248,19 @@ endif
 
 ifeq ($(ENCRYPT),1)
   CFLAGS+=-D"EXT_ENCRYPTED=1"
-  WOLFCRYPT_OBJS+=./lib/wolfssl/wolfcrypt/src/chacha.o
+  ifeq ($(ENCRYPT_WITH_AES128),1)
+    CFLAGS+=-DWOLFSSL_AES_COUNTER -DWOLFSSL_AES_DIRECT
+    CFLAGS+=-DENCRYPT_WITH_AES128 -DWOLFSSL_AES_128
+    WOLFCRYPT_OBJS+=./lib/wolfssl/wolfcrypt/src/aes.o
+  else ifeq ($(ENCRYPT_WITH_AES256),1)
+    CFLAGS+=-DWOLFSSL_AES_COUNTER -DWOLFSSL_AES_DIRECT
+    CFLAGS+=-DENCRYPT_WITH_AES256 -DWOLFSSL_AES_256
+    WOLFCRYPT_OBJS+=./lib/wolfssl/wolfcrypt/src/aes.o
+  else
+    ENCRYPT_WITH_CHACHA=1
+    WOLFCRYPT_OBJS+=./lib/wolfssl/wolfcrypt/src/chacha.o
+    CFLAGS+=-DENCRYPT_WITH_CHACHA -DHAVE_CHACHA
+  endif
 endif
 
 ifeq ($(EXT_FLASH),1)
@@ -185,7 +291,7 @@ endif
 
 
 ifeq ($(DEBUG),1)
-  CFLAGS+=-O0 -g -ggdb3 -D"DEBUG=1"
+  CFLAGS+=-O0 -g -ggdb3
 else
   ifeq ($(OPTIMIZATION_LEVEL),)
     CFLAGS+=-Os
@@ -225,6 +331,10 @@ ifeq ($(DELTA_UPDATES),1)
   endif
 endif
 
+ifeq ($(ARMORED),1)
+  CFLAGS+=-DWOLFBOOT_ARMORED
+endif
+
 OBJS+=$(PUBLIC_KEY_OBJS)
 OBJS+=$(UPDATE_OBJS)
 
@@ -247,6 +357,9 @@ ifeq ($(WOLFTPM),1)
   endif
   WOLFCRYPT_OBJS+=./lib/wolfssl/wolfcrypt/src/aes.o
   WOLFCRYPT_OBJS+=./lib/wolfssl/wolfcrypt/src/hmac.o
+  ifeq ($(DEBUG),1)
+    CFLAGS+=-DWOLFBOOT_DEBUG_TPM=1
+  endif
 endif
 
 ## Hash settings
@@ -260,5 +373,5 @@ ifeq ($(HASH),SHA3)
   SIGN_OPTIONS+=--sha3
 endif
 
-
+CFLAGS+=-DIMAGE_HEADER_SIZE=$(IMAGE_HEADER_SIZE)
 OBJS+=$(WOLFCRYPT_OBJS)

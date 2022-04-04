@@ -50,10 +50,12 @@ CFLAGS+= \
   -D"PLATFORM_$(TARGET)"
 
 # Setup default optimizations (for GCC)
-ifeq ($(USE_GCC),1)
-  CFLAGS+=-Wall -Wextra -Wno-main -ffreestanding -Wno-unused -nostartfiles
-  CFLAGS+=-ffunction-sections -fdata-sections
-  LDFLAGS+=-T $(LSCRIPT) -Wl,-gc-sections -Wl,-Map=wolfboot.map -ffreestanding -nostartfiles
+ifneq ($(TARGET),x86_64_efi)
+  ifeq ($(USE_GCC),1)
+    CFLAGS+=-Wall -Wextra -Wno-main -ffreestanding -Wno-unused -nostartfiles
+    CFLAGS+=-ffunction-sections -fdata-sections
+    LDFLAGS+=-T $(LSCRIPT) -Wl,-gc-sections -Wl,-Map=wolfboot.map -ffreestanding -nostartfiles
+  endif
 endif
 >>>>>>> 45dc8aa642b025a384b1e6545be3979acfb13ded:Makefile
 
@@ -64,11 +66,31 @@ ifeq ($(TARGET),stm32l5)
 	MAIN_TARGET:=wolfboot.bin test-app/image_v1_signed.bin
 endif
 
+ifeq ($(TARGET),stm32u5)
+    # Don't build a contiguous image
+	MAIN_TARGET:=wolfboot.bin test-app/image_v1_signed.bin
+endif
+
+ifeq ($(TARGET),x86_64_efi)
+	MAIN_TARGET:=wolfboot.efi
+endif
+
 ASFLAGS:=$(CFLAGS)
 
 BOOTLOADER_PARTITION_SIZE?=$$(( $(WOLFBOOT_PARTITION_BOOT_ADDRESS) - $(ARCH_FLASH_OFFSET)))
 
 all: $(MAIN_TARGET)
+
+wolfboot.efi: wolfboot.elf
+	@echo "\t[BIN] $@"
+	$(Q)$(OBJCOPY)  -j .text -j .sdata -j .data \
+                -j .dynamic -j .dynsym  -j .rel \
+                -j .rela -j .reloc -j .eh_frame \
+                --target=efi-app-x86_64 --subsystem=10 $^ $@
+	@echo
+	@echo "\t[SIZE]"
+	$(Q)$(SIZE) wolfboot.efi
+	@echo
 
 wolfboot.bin: wolfboot.elf
 	@echo "\t[BIN] $@"
@@ -80,7 +102,6 @@ wolfboot.bin: wolfboot.elf
 
 test-app/image.bin: wolfboot.elf
 	$(Q)$(MAKE) -C test-app WOLFBOOT_ROOT=$(WOLFBOOT_ROOT)
-	$(Q)rm -f src/*.o hal/*.o
 	$(Q)$(SIZE) test-app/image.elf
 
 standalone:
@@ -95,11 +116,18 @@ standalone:
 include tools/test.mk
 include tools/test-enc.mk
 include tools/test-delta.mk
+include tools/test-renode.mk
 
 ed25519.der:
 	$(Q)$(KEYGEN_TOOL) $(KEYGEN_OPTIONS) src/ed25519_pub_key.c
+ed448.der:
+	$(Q)$(KEYGEN_TOOL) $(KEYGEN_OPTIONS) src/ed448_pub_key.c
 ecc256.der:
 	$(Q)$(KEYGEN_TOOL) $(KEYGEN_OPTIONS) src/ecc256_pub_key.c
+ecc384.der:
+	$(Q)$(KEYGEN_TOOL) $(KEYGEN_OPTIONS) src/ecc384_pub_key.c
+ecc521.der:
+	$(Q)$(KEYGEN_TOOL) $(KEYGEN_OPTIONS) src/ecc521_pub_key.c
 rsa2048.der:
 	$(Q)$(KEYGEN_TOOL) $(KEYGEN_OPTIONS) src/rsa2048_pub_key.c
 rsa4096.der:
@@ -120,6 +148,7 @@ factory.bin: $(BOOT_IMG) wolfboot.bin $(PRIVATE_KEY) test-app/image_v1_signed.bi
 
 wolfboot.elf: include/target.h $(OBJS) $(LSCRIPT) FORCE
 	@echo "\t[LD] $@"
+	@echo $(OBJS)
 	$(Q)$(LD) $(LDFLAGS) $(LD_START_GROUP) $(OBJS) $(LD_END_GROUP) -o $@
 
 $(LSCRIPT): hal/$(TARGET).ld FORCE
@@ -136,7 +165,13 @@ hex: wolfboot.hex
 
 src/ed25519_pub_key.c: ed25519.der
 
+src/ed448_pub_key.c: ed448.der
+
 src/ecc256_pub_key.c: ecc256.der
+
+src/ecc384_pub_key.c: ecc384.der
+
+src/ecc521_pub_key.c: ecc521.der
 
 src/rsa2048_pub_key.c: rsa2048.der
 

@@ -35,10 +35,12 @@
 #endif
 #define IMAGE_HEADER_OFFSET (2 * sizeof(uint32_t))
 
-#ifdef NVM_FLASH_WRITEONCE
-#   define FLASHBUFFER_SIZE WOLFBOOT_SECTOR_SIZE 
-#else
-#   define FLASHBUFFER_SIZE IMAGE_HEADER_SIZE
+#ifndef FLASHBUFFER_SIZE
+#    ifdef NVM_FLASH_WRITEONCE
+#        define FLASHBUFFER_SIZE WOLFBOOT_SECTOR_SIZE
+#    else
+#        define FLASHBUFFER_SIZE IMAGE_HEADER_SIZE
+#    endif
 #endif
 
 #ifdef BIG_ENDIAN_ORDER
@@ -68,6 +70,9 @@
 #define HDR_IMG_TYPE_AUTH_ECC256  0x0200
 #define HDR_IMG_TYPE_AUTH_RSA2048 0x0300
 #define HDR_IMG_TYPE_AUTH_RSA4096 0x0400
+#define HDR_IMG_TYPE_AUTH_ED448   0x0500
+#define HDR_IMG_TYPE_AUTH_ECC384  0x0600
+#define HDR_IMG_TYPE_AUTH_ECC521  0x0700
 #define HDR_IMG_TYPE_WOLFBOOT     0x0000
 #define HDR_IMG_TYPE_APP          0x0001
 #define HDR_IMG_TYPE_DIFF         0x00D0
@@ -78,14 +83,21 @@
  #   define HDR_IMG_TYPE_AUTH HDR_IMG_TYPE_AUTH_NONE
  #elif defined(WOLFBOOT_SIGN_ED25519)
  #   define HDR_IMG_TYPE_AUTH HDR_IMG_TYPE_AUTH_ED25519
+ #elif defined(WOLFBOOT_SIGN_ED448)
+ #   define HDR_IMG_TYPE_AUTH HDR_IMG_TYPE_AUTH_ED448
  #elif defined(WOLFBOOT_SIGN_ECC256)
  #   define HDR_IMG_TYPE_AUTH HDR_IMG_TYPE_AUTH_ECC256
+ #elif defined(WOLFBOOT_SIGN_ECC384)
+ #   define HDR_IMG_TYPE_AUTH HDR_IMG_TYPE_AUTH_ECC384
+ #elif defined(WOLFBOOT_SIGN_ECC521)
+ #   define HDR_IMG_TYPE_AUTH HDR_IMG_TYPE_AUTH_ECC521
+ #   error "ECC521 curves not yet supported in this version of wolfBoot. Please select a valid SIGN= option."
  #elif defined(WOLFBOOT_SIGN_RSA2048)
  #   define HDR_IMG_TYPE_AUTH HDR_IMG_TYPE_AUTH_RSA2048
  #elif defined(WOLFBOOT_SIGN_RSA4096)
  #   define HDR_IMG_TYPE_AUTH HDR_IMG_TYPE_AUTH_RSA4096
  #else
- #   error "no valid authentication mechanism selected. Please define WOLFBOOT_SIGN_ED25519 or WOLFBOOT_SIGN_ECC256 or WOLFBOOT_SIGN_RSA2048"
+ #   error "no valid authentication mechanism selected. Please select a valid SIGN= option."
  #endif /* defined WOLFBOOT_SIGN_ECC256 || WOLFBOOT_SIGN_ED25519 */
 #endif /* defined WOLFBOOT */
 
@@ -126,7 +138,7 @@ int wolfBoot_dualboot_candidate(void);
 
 /* Hashing function configuration */
 #if defined(WOLFBOOT_HASH_SHA256)
-#   define WOLFBOOT_SHA_BLOCK_SIZE (16)
+#   define WOLFBOOT_SHA_BLOCK_SIZE (256)
 #   define WOLFBOOT_SHA_HDR HDR_SHA256
 #   define WOLFBOOT_SHA_DIGEST_SIZE (32)
 #   define image_hash image_sha256
@@ -141,10 +153,26 @@ int wolfBoot_dualboot_candidate(void);
 #   error "No valid hash algorithm defined!"
 #endif
 
+
+#ifdef EXT_ENCRYPTED
 /* Encryption support */
-#define ENCRYPT_BLOCK_SIZE 16 
-#define ENCRYPT_KEY_SIZE 32 /* Chacha20 - 256bit */
-#define ENCRYPT_NONCE_SIZE 12 /* 96 bit*/
+#if defined(ENCRYPT_WITH_CHACHA)
+    #define ENCRYPT_BLOCK_SIZE 64
+    #define ENCRYPT_KEY_SIZE 32 /* Chacha20 - 256bit */
+    #define ENCRYPT_NONCE_SIZE 12 /* 96 bit*/
+#elif defined(ENCRYPT_WITH_AES128)
+    #define ENCRYPT_BLOCK_SIZE 16
+    #define ENCRYPT_KEY_SIZE 16 /* AES128  */
+    #define ENCRYPT_NONCE_SIZE 16 /* AES IV size */
+#elif defined(ENCRYPT_WITH_AES256)
+    #define ENCRYPT_BLOCK_SIZE 16
+    #define ENCRYPT_KEY_SIZE 32 /* AES256 */
+    #define ENCRYPT_NONCE_SIZE 16 /* AES IV size */
+#else
+#   error "Encryption ON, but no encryption algorithm selected."
+#endif
+
+#endif /* EXT_ENCRYPTED */
 
 #ifdef DELTA_UPDATES
 int wolfBoot_get_diffbase_hdr(uint8_t part, uint8_t **ptr);
@@ -153,4 +181,5 @@ int wolfBoot_get_diffbase_hdr(uint8_t part, uint8_t **ptr);
 int wolfBoot_set_encrypt_key(const uint8_t *key, const uint8_t *nonce);
 int wolfBoot_get_encrypt_key(uint8_t *key, uint8_t *nonce);
 int wolfBoot_erase_encrypt_key(void);
+
 #endif /* !WOLFBOOT_H */

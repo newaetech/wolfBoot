@@ -53,6 +53,9 @@ HDR_IMG_TYPE_AUTH_ED25519 = 0x0100
 HDR_IMG_TYPE_AUTH_ECC256  = 0x0200
 HDR_IMG_TYPE_AUTH_RSA2048 = 0x0300
 HDR_IMG_TYPE_AUTH_RSA4096 = 0x0400
+HDR_IMG_TYPE_AUTH_ED448   = 0x0500
+HDR_IMG_TYPE_AUTH_ECC384  = 0x0600
+HDR_IMG_TYPE_AUTH_ECC521  = 0x0700
 HDR_IMG_TYPE_DIFF         = 0x00D0
 
 HDR_IMG_TYPE_WOLFBOOT     = 0x0000
@@ -65,6 +68,9 @@ self_update=False
 sha_only=False
 manual_sign=False
 encrypt=False
+chacha=True
+aes128=False
+aes256=False
 delta=False
 encrypt_key_file=None
 delta_base_file=None
@@ -89,8 +95,8 @@ def make_header(image_file, fw_version, extra_fields=[]):
     header += struct.pack('<L', fw_version)
 
     # Four pad bytes, so timestamp is aligned
-    header += struct.pack('BB', 0xFF, 0xFF)
-    header += struct.pack('BB', 0xFF, 0xFF)
+    header += struct.pack('BB', HDR_PADDING, HDR_PADDING)
+    header += struct.pack('BB', HDR_PADDING, HDR_PADDING)
 
     # Timestamp field
     header += struct.pack('<HH', HDR_TIMESTAMP, HDR_TIMESTAMP_LEN)
@@ -102,8 +108,14 @@ def make_header(image_file, fw_version, extra_fields=[]):
         img_type = HDR_IMG_TYPE_AUTH_NONE
     if (sign == 'ed25519'):
         img_type = HDR_IMG_TYPE_AUTH_ED25519
+    if (sign == 'ed448'):
+        img_type = HDR_IMG_TYPE_AUTH_ED448
     if (sign == 'ecc256'):
         img_type = HDR_IMG_TYPE_AUTH_ECC256
+    if (sign == 'ecc384'):
+        img_type = HDR_IMG_TYPE_AUTH_ECC384
+    if (sign == 'ecc521'):
+        img_type = HDR_IMG_TYPE_AUTH_ECC521
     if (sign == 'rsa2048'):
         img_type = HDR_IMG_TYPE_AUTH_RSA2048
     if (sign == 'rsa4096'):
@@ -120,13 +132,20 @@ def make_header(image_file, fw_version, extra_fields=[]):
     for t in extra_fields:
         tag = t[0]
         sz = t[1]
+        if sz == 4:
+            while (len(header) % 4) != 0:
+                header += struct.pack('B', HDR_PADDING)
+        elif sz == 8:
+            while (len(header) % 8) != 4:
+                header += struct.pack('B', HDR_PADDING)
+
         payload = t[2]
         header += struct.pack('<HH', tag, sz)
         header += payload
 
     # Pad bytes. Sha-3 field requires 8-byte alignment
     while (len(header) % 8) != 4:
-        header += struct.pack('B', 0xFF)
+        header += struct.pack('B', HDR_PADDING)
 
     print("Calculating %s digest..." % hash_algo)
 
@@ -204,7 +223,9 @@ def make_header(image_file, fw_version, extra_fields=[]):
             print("Signing the firmware...")
             if (sign == 'ed25519'):
                 signature = ed.sign(digest)
-            elif (sign == 'ecc256'):
+            elif (sign == 'ed448'):
+                signature = ed.sign(digest)
+            elif (sign[0:3] == 'ecc'):
                 r, s = ecc.sign_raw(digest)
                 signature = r + s
             elif (sign == 'rsa2048') or (sign == 'rsa4096'):
@@ -221,7 +242,7 @@ def make_header(image_file, fw_version, extra_fields=[]):
                 print("Wrong signature file size %d, expected %d" % (len(buf), HDR_SIGNATURE_LEN))
                 sys.exit(4)
             signature = buf
-    
+
         header += struct.pack('<HH', HDR_SIGNATURE, HDR_SIGNATURE_LEN)
         header += signature
     #print ("Signature %d" % len(signature))
@@ -233,11 +254,11 @@ def make_header(image_file, fw_version, extra_fields=[]):
 #### MAIN ####
 
 if (argc < 4) or (argc > 10):
-    print("Usage: %s [--ed25519 | --ecc256 | --rsa2048 | --rsa4096 | --no-sign] [--sha256 | --sha3] [--wolfboot-update] [--encrypt key.bin] [--delta base_file.bin] image key.der fw_version\n" % sys.argv[0])
+    print("Usage: %s [--ed25519 | --ed448 | --ecc256 | --rsa2048 | --rsa4096 | --no-sign] [--sha256 | --sha3] [--wolfboot-update] [--encrypt key.bin] [--delta base_file.bin] image key.der fw_version\n" % sys.argv[0])
     print("  - or - ")
     print("       %s [--sha256 | --sha3] [--sha-only] [--wolfboot-update] [--encrypt key.bin] [--delta base_file.bin] image pub_key.der fw_version\n" % sys.argv[0])
     print("  - or - ")
-    print("       %s [--ed25519 | --ecc256 | --rsa2048 | --rsa4096 ] [--sha256 | --sha3] [--manual-sign] [--encrypt key.bin] [--delta base_file.bin] image pub_key.der fw_version signature.sig\n" % sys.argv[0])
+    print("       %s [--ed25519 | --ed448 | --ecc256 | --rsa2048 | --rsa4096 ] [--sha256 | --sha3] [--manual-sign] [--chacha | --aes128 | --aes256 ] [--encrypt key.bin] [--delta base_file.bin] image pub_key.der fw_version signature.sig\n" % sys.argv[0])
     sys.exit(1)
 
 i = 1
@@ -246,8 +267,14 @@ while (i < len(argv)):
         sign='none'
     elif (argv[i] == '--ed25519'):
         sign='ed25519'
+    elif (argv[i] == '--ed448'):
+        sign='ed448'
     elif (argv[i] == '--ecc256'):
         sign='ecc256'
+    elif (argv[i] == '--ecc384'):
+        sign='ecc384'
+    elif (argv[i] == '--ecc521'):
+        sign='ecc521'
     elif (argv[i] == '--rsa2048'):
         sign='rsa2048'
     elif (argv[i] == '--rsa4096'):
@@ -266,6 +293,16 @@ while (i < len(argv)):
         encrypt = True
         i += 1
         encrypt_key_file = argv[i]
+    elif (argv[i] == '--chacha'):
+        encrypt = True
+    elif (argv[i] == '--aes128'):
+        encrypt = True
+        chacha = False
+        aes128 = True
+    elif (argv[i] == '--aes256'):
+        encrypt = True
+        chacha = False
+        aes256 = True
     elif (argv[i] == '--delta'):
         delta = True
         i += 1
@@ -279,6 +316,24 @@ while (i < len(argv)):
 if (encrypt and delta):
     print("Encryption of delta images not supported yet.")
     sys.exit(1)
+
+try:
+    cfile = open(".config", "r")
+except:
+    cfile = None
+    pass
+
+if cfile:
+    l = cfile.readline()
+    while l != '':
+        if "IMAGE_HEADER_SIZE" in l:
+            val=l.split('=')[1].rstrip('\n')
+            WOLFBOOT_HEADER_SIZE = int(val,0)
+            print("IMAGE_HEADER_SIZE (from .config): " + str(WOLFBOOT_HEADER_SIZE))
+
+        l = cfile.readline()
+    cfile.close()
+
 
 image_file = argv[i+1]
 if sign != 'none':
@@ -379,6 +434,13 @@ elif wolfboot_key_buffer_len == 64:
         else:
             sign = 'ed25519'
             print("'ed25519' key autodetected.")
+elif wolfboot_key_buffer_len == 114:
+    if (sign != 'ed448' and not manual_sign and not sha_only):
+        print("Error: key size incorrect for cipher")
+        sys.exit(1)
+    elif sign == 'auto' and (manual_sign or sha_only):
+        sign = 'ed448'
+        print("'ed448' public key autodetected.")
 elif wolfboot_key_buffer_len == 96:
     if (sign == 'ed25519'):
         print("Error: key size does not match the cipher selected")
@@ -386,6 +448,20 @@ elif wolfboot_key_buffer_len == 96:
     if sign == 'auto':
         sign = 'ecc256'
         print("'ecc256' key autodetected.")
+elif wolfboot_key_buffer_len == 144:
+    if (sign != 'auto' and sign != 'ecc384'):
+        print("Error: key size does not match the cipher selected")
+        sys.exit(1)
+    if sign == 'auto':
+        sign = 'ecc384'
+        print("'ecc384' key autodetected.")
+elif wolfboot_key_buffer_len == 198:
+    if (sign != 'auto' and sign != 'ecc521'):
+        print("Error: key size does not match the cipher selected")
+        sys.exit(1)
+    if sign == 'auto':
+        sign = 'ecc521'
+        print("'ecc521' key autodetected.")
 elif (wolfboot_key_buffer_len > 512):
     if (sign == 'auto'):
         print("'rsa4096' key autodetected.")
@@ -393,7 +469,7 @@ elif (wolfboot_key_buffer_len > 128):
     if (sign == 'auto'):
         print("'rsa2048' key autodetected.")
     elif (sign != 'rsa2048'):
-        print ("Error: key size too large for the selected cipher")
+        print ("Error: key size %d too large for the selected cipher" % wolfboot_key_buffer_len)
 else:
     print ("Error: key size does not match any cipher")
     sys.exit(2)
@@ -407,33 +483,66 @@ elif not sha_only and not manual_sign:
         ed = ciphers.Ed25519Private(key = wolfboot_key_buffer)
         privkey, pubkey = ed.encode_key()
 
+    if sign == 'ed448':
+        HDR_SIGNATURE_LEN = 114
+        if WOLFBOOT_HEADER_SIZE < 512:
+            print("Ed448: header size increased to 512")
+            WOLFBOOT_HEADER_SIZE = 512
+        ed = ciphers.Ed448Private(key = wolfboot_key_buffer)
+        privkey, pubkey = ed.encode_key()
+
     if sign == 'ecc256':
         ecc = ciphers.EccPrivate()
-        ecc.decode_key_raw(wolfboot_key_buffer[0:31], wolfboot_key_buffer[32:63], wolfboot_key_buffer[64:])
+        ecc.decode_key_raw(wolfboot_key_buffer[0:32], wolfboot_key_buffer[32:64], wolfboot_key_buffer[64:])
         pubkey = wolfboot_key_buffer[0:64]
 
+    if sign == 'ecc384':
+        HDR_SIGNATURE_LEN = 96
+        if WOLFBOOT_HEADER_SIZE < 512:
+            print("Ecc384: header size increased to 512")
+            WOLFBOOT_HEADER_SIZE = 512
+        ecc = ciphers.EccPrivate()
+        ecc.decode_key_raw(wolfboot_key_buffer[0:48], wolfboot_key_buffer[48:96], wolfboot_key_buffer[96:],
+                curve_id = ciphers.ECC_SECP384R1)
+        pubkey = wolfboot_key_buffer[0:96]
+
+    if sign == 'ecc521':
+        HDR_SIGNATURE_LEN = 132
+        ecc = ciphers.EccPrivate()
+        ecc.decode_key_raw(wolfboot_key_buffer[0:66], wolfboot_key_buffer[66:132], wolfboot_key_buffer[132:],
+                curve_id = ciphers.ECC_SECP521R1)
+        pubkey = wolfboot_key_buffer[0:132]
+        if WOLFBOOT_HEADER_SIZE < 512:
+            print("Ecc521: header size increased to 512")
+            WOLFBOOT_HEADER_SIZE = 512
+
     if sign == 'rsa2048':
-        WOLFBOOT_HEADER_SIZE = 512
+        if WOLFBOOT_HEADER_SIZE < 512:
+            print("Rsa2048: header size increased to 512")
+            WOLFBOOT_HEADER_SIZE = 512
         HDR_SIGNATURE_LEN = 256
         rsa = ciphers.RsaPrivate(wolfboot_key_buffer)
         privkey,pubkey = rsa.encode_key()
 
     if sign == 'rsa4096':
-        WOLFBOOT_HEADER_SIZE = 1024
+        if WOLFBOOT_HEADER_SIZE < 1024:
+            print("Rsa4096: header size increased to 1024")
+            WOLFBOOT_HEADER_SIZE = 1024
         HDR_SIGNATURE_LEN = 512
         rsa = ciphers.RsaPrivate(wolfboot_key_buffer)
         privkey,pubkey = rsa.encode_key()
 
 else:
     if sign == 'rsa2048':
-        WOLFBOOT_HEADER_SIZE = 512
+        if WOLFBOOT_HEADER_SIZE < 512:
+            WOLFBOOT_HEADER_SIZE = 512
         HDR_SIGNATURE_LEN = 256
     if sign == 'rsa4096':
-        WOLFBOOT_HEADER_SIZE = 1024
+        if WOLFBOOT_HEADER_SIZE < 1024:
+            WOLFBOOT_HEADER_SIZE = 1024
         HDR_SIGNATURE_LEN = 512
 
     pubkey = wolfboot_key_buffer
-
 
 header = make_header(image_file, fw_version)
 
@@ -442,7 +551,7 @@ outfile = open(output_image_file, 'wb')
 outfile.write(header)
 sz = len(header)
 while sz < WOLFBOOT_HEADER_SIZE:
-    outfile.write(struct.pack('B',0xFF))
+    outfile.write(struct.pack('B',HDR_PADDING))
     sz += 1
 infile = open(image_file, 'rb')
 while True:
@@ -485,7 +594,7 @@ if (delta):
     outfile.write(header)
     sz = len(header)
     while sz < WOLFBOOT_HEADER_SIZE:
-        outfile.write(struct.pack('B', 0xFF))
+        outfile.write(struct.pack('B', HDR_PADDING))
         sz += 1
     infile = open(tmp_outfile, 'rb')
     while True:
@@ -503,17 +612,39 @@ if (encrypt):
     off = 0
     outfile = open(output_image_file, 'rb')
     ekeyfile = open(encrypt_key_file, 'rb')
-    key = ekeyfile.read(32)
-    iv_nonce = ekeyfile.read(12)
     enc_outfile = open(encrypted_output_image_file, 'wb')
-    cha = ciphers.ChaCha(key, 32)
-    while(True):
-        cha.set_iv(iv_nonce, off)
-        buf = outfile.read(16)
-        if len(buf) == 0:
-            break
-        enc_outfile.write(cha.encrypt(buf))
-        off += 1
+    if chacha:
+        key = ekeyfile.read(32)
+        iv_nonce = ekeyfile.read(12)
+        cha = ciphers.ChaCha(key, 32)
+        cha.set_iv(iv_nonce, 0)
+        while True:
+            buf = outfile.read(16)
+            if len(buf) == 0:
+                break
+            enc_outfile.write(cha.encrypt(buf))
+    elif aes128:
+        key = ekeyfile.read(16)
+        iv = ekeyfile.read(16)
+        aesctr = ciphers.Aes(key, ciphers.MODE_CTR, iv)
+        while True:
+            buf = outfile.read(16)
+            if len(buf) == 0:
+                break
+            while (len(buf) % 16) != 0:
+                buf += struct.pack('B', HDR_PADDING)
+            enc_outfile.write(aesctr.encrypt(buf))
+    elif aes256:
+        key = ekeyfile.read(32)
+        iv = ekeyfile.read(16)
+        aesctr = ciphers.Aes(key, ciphers.MODE_CTR, iv)
+        while True:
+            buf = outfile.read(16)
+            if len(buf) == 0:
+                break
+            while (len(buf) % 16) != 0:
+                buf += struct.pack('B', HDR_PADDING)
+            enc_outfile.write(aesctr.encrypt(buf))
     outfile.close()
     ekeyfile.close()
     enc_outfile.close()
