@@ -40,7 +40,7 @@ MAIN_TARGET=factory.bin
 
 ifeq ($(TARGET),stm32l5)
     # Don't build a contiguous image
-	MAIN_TARGET:=wolfboot.bin test-app/image_v1_signed.bin
+	MAIN_TARGET:=wolfboot.bin test-app/image_v2_signed.bin
 endif
 
 ASFLAGS:=$(CFLAGS)
@@ -86,14 +86,14 @@ rsa4096.der:
 keytools:
 	@make -C tools/keytools
 
-test-app/image_v1_signed.bin: test-app/image.bin
+test-app/image_v2_signed.bin: test-app/image.bin
 	@echo "\t[SIGN] $(BOOT_IMG)"
 	$(Q)$(SIGN_TOOL) $(SIGN_OPTIONS) $(BOOT_IMG) $(PRIVATE_KEY) 2
 
-factory.bin: $(BOOT_IMG) wolfboot.bin $(PRIVATE_KEY) test-app/image_v1_signed.bin $(BINASSEMBLE)
+factory.bin: $(BOOT_IMG) wolfboot.bin $(PRIVATE_KEY) test-app/image_v2_signed.bin $(BINASSEMBLE)
 	@echo "\t[MERGE] $@"
 	$(Q)$(BINASSEMBLE) $@ $(ARCH_FLASH_OFFSET) wolfboot.bin \
-                              $(WOLFBOOT_PARTITION_BOOT_ADDRESS) test-app/image_v1_signed.bin
+                              $(WOLFBOOT_PARTITION_BOOT_ADDRESS) test-app/image_v2_signed.bin
 
 wolfboot.elf: include/target.h $(OBJS) $(LSCRIPT) FORCE
 	@echo "\t[LD] $@"

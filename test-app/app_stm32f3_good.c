@@ -47,7 +47,13 @@ void main(void) {
 	volatile uint32_t *GPIOB_PUPDR = (uint32_t *)(GPIOB + 0x0C);
 	volatile uint32_t *GPIOB_IDR = (uint32_t *)(GPIOB + 0x10);
 
-	*AHB_ENABLE_REG |= (1 << 19) | (1 << 18);
+	volatile uint8_t  *GPIOA = (uint8_t *) 0x48000000;
+	volatile uint32_t *GPIOA_MODER = (uint32_t *)GPIOA;
+	volatile uint32_t *GPIOA_ODR = (uint32_t *)(GPIOA + 0x14);
+	volatile uint32_t *GPIOA_PUPDR = (uint32_t *)(GPIOA + 0x0C);
+	volatile uint32_t *GPIOA_IDR = (uint32_t *)(GPIOA + 0x10);
+
+	*AHB_ENABLE_REG |= (1 << 19) | (1 << 18) | (1 << 17);
 
 	reg = *AHB_ENABLE_REG;
 	reg = *AHB_ENABLE_REG;
@@ -57,10 +63,15 @@ void main(void) {
 	*GPIOC_MODER |= (0b01) << 30;
 	*GPIOC_ODR |= 1 << 15;
 
-	while (!(*GPIOB_IDR & (1 << 12)));
+	// *GPIOA_ODR &= ~(1 << 11);
+	// *GPIOA_MODER |= (0b01) << 22;
+	// *GPIOA_ODR &= ~(1 << 11);
 
-	*GPIOC_ODR &= ~(1 << 15);
-    wolfBoot_update_trigger();
+	*GPIOA_MODER |= (0b01 << 22) | (0b01 << 18);
+
+	*GPIOA_ODR |= (1 << 11);
+	*GPIOA_ODR |= (1 << 9);
+
 	while(1);
 }
 
