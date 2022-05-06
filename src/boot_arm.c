@@ -299,7 +299,8 @@ asm(
 void isr_fault(void)
 {
     /* Panic. */
-    wolfBoot_panic();
+    // wolfBoot_panic();
+    while(1);
 }
 
 void isr_empty(void)

@@ -52,7 +52,9 @@ int main(void)
     //         k++;
     //     }
     // }
+    #ifdef GLITCH_VER
     wolfBoot_update_trigger();
+    #endif
     trigger_setup();
     // while (1) {
     //     trigger_high();
@@ -84,7 +86,8 @@ int main(void)
     wolfBoot_start();
 
     /* wolfBoot_start should never return. */
-    wolfBoot_panic();
+    // wolfBoot_panic();
+    while(1);
 
     return 0;
 }

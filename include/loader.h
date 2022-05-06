@@ -87,10 +87,11 @@ void wolfBoot_start(void);
     asm volatile("b .-8"); 
 
 #else
-static inline void wolfBoot_panic(void)
-{
-    while(1)
-        ;
-}
+#define wolfBoot_panic()
+// static inline void wolfBoot_panic(void)
+// {
+//     while(1)
+//         ;
+// }
 #endif
 #endif /* LOADER_H */

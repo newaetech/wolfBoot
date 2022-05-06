@@ -34,6 +34,12 @@
 // #error WORLFOB
 // #endif
 
+// #define ENABLE_AUTH 1
+
+#if defined(GLITCH_AUTH) && defined(GLITCH_VER)
+#error Cannot test authentication and version glitch at same time! Check .config
+#endif
+
 #ifdef RAM_CODE
 extern unsigned int _start_text;
 static volatile const uint32_t __attribute__((used)) wolfboot_version = WOLFBOOT_VERSION;
@@ -113,7 +119,7 @@ void wolfBoot_check_self_update(void)
             return;
         if (wolfBoot_verify_authenticity(&update) < 0)
             return;
-        PART_SANITY_CHECK(&update);
+        // PART_SANITY_CHECK(&update);
         wolfBoot_self_update(&update);
     }
 }
@@ -374,14 +380,21 @@ static int RAMFUNCTION wolfBoot_update(int fallback_allowed)
     {
         if (((update_type & 0x000F) != HDR_IMG_TYPE_APP) || ((update_type & 0xFF00) != HDR_IMG_TYPE_AUTH))
             return -1;
-        if (!update.hdr_ok || (wolfBoot_verify_integrity(&update) < 0)) {
-                // || (wolfBoot_verify_authenticity(&update) < 0)) {
+        if (!update.hdr_ok || (wolfBoot_verify_integrity(&update) < 0) 
+        // if (!update.hdr_ok ||
+        #ifdef GLITCH_AUTH
+                || (wolfBoot_verify_authenticity(&update) < 0)
+        #endif
+        ){
             return -1;
         }
-#ifdef WOLFBOOT_ARMORED
-        // PART_SANITY_CHECK(&update);
+#if defined(WOLFBOOT_ARMORED) && defined(GLITCH_AUTH)
+        PART_SANITY_CHECK(&update);
 #endif
+
+#if defined(GLITCH_VER)
         trigger_high();
+#endif
 #ifndef WOLFBOOT_ARMORED
     #ifndef ALLOW_DOWNGRADE
             if ( !fallback_allowed &&
@@ -408,7 +421,9 @@ static int RAMFUNCTION wolfBoot_update(int fallback_allowed)
     }
 #endif
 
+    #ifdef GLITCH_VER
     trigger_low();
+    #endif
     hal_flash_unlock();
 #ifdef EXT_FLASH
     ext_flash_unlock();
@@ -507,40 +522,27 @@ void RAMFUNCTION wolfBoot_start(void)
     /* Check if the BOOT partition is still in TESTING,
      * to trigger fallback.
      */
-#if 0
-    while (1) {
-        if ((wolfBoot_get_partition_state(PART_BOOT, &st) == 0) && (st == IMG_STATE_TESTING)) {
-            wolfBoot_update_trigger();
-            wolfBoot_update(1);
-        } else if ((wolfBoot_get_partition_state(PART_UPDATE, &st) == 0) && (st == IMG_STATE_UPDATING)) {
-        /* Check for new updates in the UPDATE partition */
-            if (wolfBoot_update(0) < 0) 0;
-            if ((wolfBoot_get_partition_state(PART_BOOT, &st) == 0) && (st == IMG_STATE_TESTING)) {
-                goto bad_goto_usage;
-            } else {
-                trigger_low();
-            }
-        }
-    }
-bad_goto_usage:
-#else
     if ((wolfBoot_get_partition_state(PART_BOOT, &st) == 0) && (st == IMG_STATE_TESTING)) {
         wolfBoot_update_trigger();
         wolfBoot_update(1);
     } else if ((wolfBoot_get_partition_state(PART_UPDATE, &st) == 0) && (st == IMG_STATE_UPDATING)) {
     /* Check for new updates in the UPDATE partition */
         wolfBoot_update(0);
-        trigger_low();
     }
-#endif
+
     if ((wolfBoot_open_image(&boot, PART_BOOT) < 0)
             || (wolfBoot_verify_integrity(&boot) < 0)
-            // || (wolfBoot_verify_authenticity(&boot) < 0)
+            || (wolfBoot_verify_authenticity(&boot) < 0)
             ) {
+        trigger_low();
         if (likely(wolfBoot_update(1) < 0)) {
             /* panic: no boot option available. */
-                // trigger_low();
-            wolfBoot_panic();
+            trigger_low();
+            #ifdef WOLFBOOT_ARMORED
+                wolfBoot_panic();
+            #else
+                while(1);
+            #endif
         } else {
             /* Emergency update successful, try to re-open boot image */
             if (likely(((wolfBoot_open_image(&boot, PART_BOOT) < 0) ||
@@ -548,13 +550,17 @@ bad_goto_usage:
                     (wolfBoot_verify_authenticity(&boot) < 0)))) {
                 /* panic: something went wrong after the emergency update */
                 // trigger_low();
-                wolfBoot_panic();
+                #ifdef WOLFBOOT_ARMORED
+                    wolfBoot_panic();
+                #else
+                    while(1);
+                #endif
             }
         }
     }
     trigger_low();
-#ifdef WOLFBOOT_ARMORED
-    // PART_SANITY_CHECK(&boot);
+#if defined(WOLFBOOT_ARMORED)
+    PART_SANITY_CHECK(&boot);
 #endif
     hal_prepare_boot();
     do_boot((void *)boot.fw_base);

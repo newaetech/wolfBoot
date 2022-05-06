@@ -487,9 +487,13 @@ static void wolfBoot_image_confirm_signature_ok(struct wolfBoot_image *img)
     if (XMEMCMP(img->sha_hash, digest, WOLFBOOT_SHA_DIGEST_SIZE) == 0) \
         wolfBoot_image_confirm_signature_ok(img);
 
+#ifdef GLITCH_AUTH
 #define PART_SANITY_CHECK(p) \
     if (((p)->hdr_ok != 1) || ((p)->sha_ok != 1) || ((p)->signature_ok != 1)) \
         wolfBoot_panic()
+#else
+#define PART_SANITY_CHECK(p)
+#endif
 
 #define VERIFY_VERSION_ALLOWED do{} while(0);
 

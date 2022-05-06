@@ -289,6 +289,13 @@ ifeq ($(DISABLE_BACKUP),1)
   CFLAGS+= -D"DISABLE_BACKUP"
 endif
 
+ifeq ($(GLITCH_VER),1)
+  CFLAGS+= -D"GLITCH_VER"
+endif
+
+ifeq ($(GLITCH_AUTH),1)
+  CFLAGS+= -D"GLITCH_AUTH"
+endif
 
 ifeq ($(DEBUG),1)
   CFLAGS+=-O0 -g -ggdb3

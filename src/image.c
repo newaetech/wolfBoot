@@ -35,6 +35,8 @@
 static WOLFTPM2_DEV wolftpm_dev;
 #endif /* WOLFBOOT_TPM */
 
+void trigger_high(void);
+void trigger_low(void);
 #ifdef WOLFBOOT_SIGN_ED25519
 #include <wolfssl/wolfcrypt/ed25519.h>
 
@@ -763,6 +765,9 @@ int wolfBoot_verify_integrity(struct wolfBoot_image *img)
         return -1;
     img->sha_ok = 1;
     img->sha_hash = stored_sha;
+#ifdef GLITCH_AUTH
+    trigger_high();
+#endif
     return 0;
 }
 
@@ -812,6 +817,7 @@ int wolfBoot_verify_authenticity(struct wolfBoot_image *img)
      *
      */
     wolfBoot_verify_signature(img, stored_signature);
+    // trigger_low();
     if (img->signature_ok == 1)
         return 0;
     return -2;
